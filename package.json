@@ -1,0 +1,20 @@
+{
+    "name": "NMiner",
+    "version": "v1.2.1",
+    "main": "index.js",
+    "typings": "index.d.ts",
+    "scripts": {
+        "build": "node-gyp rebuild",
+        "postinstall": "npm run build"
+    },
+    "dependencies": {
+        "colors": "^1.4.0",
+        "node-gyp": "^8.0.0",
+        "node-addon-api": "^8.3.1"
+    },
+    "engines": {
+        "node": ">=10.0.0"
+    },
+    "author": "Swarup Banerjee",
+    "license": "BSD-3-Clause"
+}
