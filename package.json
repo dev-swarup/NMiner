@@ -5,7 +5,7 @@
     "typings": "index.d.ts",
     "scripts": {
         "build": "node-gyp rebuild",
-        "postinstall": "npm run build"
+        "postinstall": "node postinstall.js"
     },
     "dependencies": {
         "colors": "^1.4.0",
