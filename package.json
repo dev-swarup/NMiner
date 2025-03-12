@@ -1,20 +1,32 @@
 {
     "name": "NMiner",
-    "version": "v1.2.1",
+    "version": "v1.0.0",
+    "description": "Silent RandomX CPU Miner",
     "main": "index.js",
     "typings": "index.d.ts",
+    "directories": {
+        "doc": "doc"
+    },
     "scripts": {
-        "build": "node-gyp rebuild",
-        "postinstall": "node postinstall.js"
+        "build": "cmake-js -p${nproc} compile",
+        "install": "node postinstall.js"
     },
     "dependencies": {
         "colors": "^1.4.0",
-        "node-gyp": "^8.0.0",
+        "cmake-js": "^7.0.0",
         "node-addon-api": "^8.3.1"
     },
     "engines": {
-        "node": ">=10.0.0"
+        "node": ">=18.0.0"
     },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/dev-swarup/NMiner.git"
+    },
+    "license": "BSD-3-Clause",
     "author": "Swarup Banerjee",
-    "license": "BSD-3-Clause"
+    "bugs": {
+        "url": "https://github.com/dev-swarup/NMiner/issues"
+    },
+    "homepage": "https://github.com/dev-swarup/NMiner#readme"
 }

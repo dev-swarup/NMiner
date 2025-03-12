@@ -1,12 +1,11 @@
-name: C/C++ CI
+name: Build NMiner
 
 on:
   push:
     branches: [ master ]
-  pull_request:
 
 jobs:
-  build-ubuntu:
+  ubuntu:
     timeout-minutes: 15
     runs-on: ${{ matrix.config.os }}
 
@@ -14,6 +13,7 @@ jobs:
       matrix:
         config:
           - { os: ubuntu-20.04, c: gcc-11, cpp: g++-11 }
+          - { os: ubuntu-22.04, c: gcc-12, cpp: g++-12 }
 
     steps:
       - name: Install dependencies
@@ -27,10 +27,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build RandomX
+      - name: Install NPM dependencies
         run: |
-          mkdir -p build_randomx
-          cd build_randomx
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc)
-          cd ..
+          npm install
+
+      - name: Build NMiner
+        run: |
+          mkdir -p build && npm run build
