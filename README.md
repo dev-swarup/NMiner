@@ -18,7 +18,6 @@ NMiner is a silent, high performance, open source, cross platform RandomX CPU mi
 * [SChernykh](https://github.com/SChernykh) - contributed significantly to the design of RandomX
 * [hyc](https://github.com/hyc) - original idea of using random code execution for PoW
 * [swarup](https://github.com/dev-swarup) - Forked RandomX to create NMiner (Node.js Miner)
-* [Other contributors](https://github.com/tevador/RandomX/graphs/contributors)
 
 ## Donations
 * XMR: `48edfHu7V9Z84YzzMa6fUueoELZ9ZRXq9VetWzYGzKt52XU5xvqgzYnDK9URnRoJMk1j8nLwEVsaSWJ4fhdUyZijBGUicoD`

@@ -12,15 +12,16 @@ jobs:
     strategy:
       matrix:
         config:
-          - { os: ubuntu-20.04, c: gcc-11, cpp: g++-11 }
-          - { os: ubuntu-22.04, c: gcc-12, cpp: g++-12 }
+          - { os: ubuntu-20.04 }
+          - { os: ubuntu-22.04 }
 
     steps:
       - name: Install dependencies
         run: |
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+
           sudo apt update
-          sudo apt install -y git build-essential cmake ${{ matrix.config.c }} ${{ matrix.config.cpp }} python3 nodejs npm
+          sudo apt install -y git build-essential cmake python3 nodejs npm
 
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -29,7 +30,7 @@ jobs:
 
       - name: Install NPM dependencies
         run: |
-          npm install
+          npm install --ignore-scripts
 
       - name: Build NMiner
         run: |
