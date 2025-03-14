@@ -1,14 +1,12 @@
 const os = require("os");
-const colors = require("colors");
-const To = require("./src/js/connect.js");
-const { print } = require("./src/js/log.js");
+const miner = require("./src/js/miner.js");
+const connect = require("./src/js/connect.js");
+const { GetTime, Print, RED, BOLD, CYAN, GRAY, GREEN, MAGENTA, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
 
-const GetHash = n => {
-    return `${n.toFixed(1)} ${n > 1000 ? "kH/s" : "H/s"}`;
-};
+const PrintHashes = n => (n > 800 ? n / 1000 : n).toFixed(1);
 module.exports.NMiner = class {
-    constructor(...args) {
-        let pool = "stratum+ssl://randomxmonero.auto.nicehash.com:443", hostname = null, address = null,
+    #miner; constructor(...args) {
+        let pool = "stratum+ssl://randomxmonero.auto.nicehash.com:443", address = null,
             pass = "x", options = { mode: os.freemem() >= 3 * 1024 * 1024 * 1024 ? "FAST" : "LIGHT", threads: Math.floor(os.cpus().length * 0.7) };
 
         switch (args.length) {
@@ -40,67 +38,77 @@ module.exports.NMiner = class {
                 throw new Error("Invalid arguments");
         };
 
-        let hashrateInterval;
-        const RandomX = require("./build/Release/RandomX.node")(options.threads, options.mode); (async function connectTo() {
-            let seed_hash, temp_job, datasetOffline, switchTo = (job, m_seed_hash) => new Promise(async resolve => {
-                RandomX.Stop();
-                if (hashrateInterval)
-                    clearInterval(hashrateInterval);
+        this.#miner = miner.init(options.mode, options.threads);
+        let m_this = this, temp_job, m_blob, m_seed_hash, datasetOffline; (async function i() {
+            try {
+                let interval; const { id, host } = await connect(pool, address, pass, m_job => {
+                    m_this.pause();
+                    const job = m_this.#miner.job(m_job.target, m_job.blob, m_blob != m_job.blob);
+                    Print(BLUE_BOLD(" net     "), `${MAGENTA("new job")} from ${WHITE_BOLD(host.host)}${job.diff ? ` diff ${WHITE_BOLD(job.diff)}` : ""} algo ${WHITE_BOLD("rx/0")}${"height" in m_job ? ` height ${WHITE_BOLD(m_job.height)}` : ""}${job.txnCount > 0 ? ` (${job.txnCount} tx)` : ""}`);
 
-                let time = (new Date()).getTime();
-                print("cpu", `${"init dataset".magenta} algo ${colors.bold("rx/0")} (${(os.cpus().length + "").cyan} threads) ${("seed " + seed_hash.slice(0, 16) + "...").gray}`);
+                    (function init(m_job) {
+                        m_blob = m_job.blob; if (datasetOffline) {
+                            temp_job = m_job;
+                            return;
+                        };
 
-                if (!(await RandomX.FreshUp()))
-                    return resolve(print("miner", "Failed to allocate ".red + colors.red.bold("RandomX")));
-                print("cpu", `${"allocated".green} ${options.mode != "LIGHT" ? `${"2336 MB".cyan} ${"(2080+256)".gray}` : `${"256 MB".cyan}`} ${"+JIT".green} ${`(${(new Date().getTime()) - time} ms)`.gray}`);
+                        if (m_seed_hash != m_job.seed_hash) {
+                            m_this.#miner.cleanup();
 
-                time = (new Date()).getTime();
-                if (!(await RandomX.Init(job, os.cpus().length)))
-                    return resolve(print("miner", "Failed to initialize dataset".red));
-                print("cpu", `${"dataset ready".green} ${`(${(new Date().getTime()) - time} ms)`.gray}`);
+                            temp_job = m_job; datasetOffline = true; m_seed_hash = m_job.seed_hash;
+                            Print(BLUE_BOLD(" randomx "), `${MAGENTA("init dataset")} algo ${WHITE_BOLD("rx/0")} (${CYAN(os.cpus().length + "")} threads) ${GRAY("seed " + m_job.seed_hash.slice(0, 16) + "...")}`);
 
-                if (seed_hash != m_seed_hash)
-                    return resolve(await switchTo(temp_job, seed_hash));
+                            let time = (new Date()).getTime(); if (!m_this.#miner.alloc()) {
+                                Print(BLUE_BOLD(" randomx "), RED(`Failed to allocate ${BOLD("RandomX")}`));
+                                return setTimeout(() => process.exit(), 500);
+                            };
 
-                datasetOffline = false;
-                time = (new Date()).getTime();
-                print("miner", `use profile ${" rx ".bgBlue} (${(options.threads + "").cyan} threads)`);
+                            Print(BLUE_BOLD(" randomx "), `${GREEN("allocated")} ${options.mode != "LIGHT" ? `${CYAN("2336 MB")} ${GRAY("(2080+256)")}` : `${CYAN("256 MB")}`} ${GetTime(time)}`);
+                            time = (new Date()).getTime(); if (!m_this.#miner.init(m_job.seed_hash, os.cpus().length)) {
+                                Print(BLUE_BOLD(" randomx "), RED(`Failed to intialize ${BOLD("RandomX")} dataset`));
+                                return setTimeout(() => process.exit(), 500);
+                            };
 
-                let jobs = RandomX.SwitchTo(temp_job);
-                if (jobs == -1)
-                    return resolve(print("miner", "Failed to switch job".red));
+                            datasetOffline = false;
+                            Print(BLUE_BOLD(" randomx "), `${GREEN("dataset ready")} ${GetTime(time)}`); if (m_seed_hash != temp_job.seed_hash)
+                                return init(temp_job);
 
-                print("miner", `${"READY".green} (${((jobs + "")[jobs == options.threads ? "cyan" : "red"] + "/" + options.threads + "").cyan} threads) ${`(${(new Date().getTime()) - time} ms)`.gray}`);
+                            Print(CYAN_BOLD(" cpu     "), `use profile ${BLUE_BOLD(" rx ")} (${CYAN(options.threads)} threads)`);
+                        };
 
-                let hashes = 0;
-                hashrateInterval = setInterval(async () => {
-                    let currentHashes = RandomX.Hashes();
-                    print("miner", `${colors.bold("speed")}           ${"(30s)".gray} ${colors.bold(GetHash((currentHashes - hashes) / 30))}      ${"(pool)".gray} ${colors.bold("0.0 H/s")}`);
+                        m_this.#miner.start((nonce, result) => {
+                            console.log(nonce, result);
+                        });
+                    })(m_job);
+                }, () => { m_this.pause(); Print(BLUE_BOLD(" net     "), RED("pool disconnected, stop mining")); interval ? clearInterval(interval) : null; setTimeout(() => i(), 10000); });
+                let tHashes = 0; interval = setInterval(() => {
+                    let { threads, totalHashes } = m_this.#miner.totalHashes(); let thisHashes = totalHashes - tHashes;
 
-                    hashes = currentHashes;
-                }, 30000);
-                return resolve();
-            });
-
-            To(pool, address, pass, async (m_job, submit) => {
-                try {
-                    const { job, target, txnCount } = RandomX.GetJob(m_job.seed_hash, m_job.target, m_job.blob, submit);
-                    print("net", `${"new job".magenta} from ${hostname} diff ${colors.bold(target)} algo ${colors.bold("rx/0")}${m_job.height ? ` height ${colors.bold(m_job.height)}` : ""} (${txnCount} tx)`);
-
-                    if (datasetOffline) {
-                        seed_hash = m_job.seed_hash; temp_job = job;
-                        return;
-                    };
-
-                    if (seed_hash != m_job.seed_hash) {
-                        seed_hash = m_job.seed_hash; temp_job = job; datasetOffline = true;
-                        return switchTo(job, m_job.seed_hash);
-                    };
-
-                    if (RandomX.SwitchTo(job) == -1)
-                        return resolve(print("miner", "Failed to switch job".red));
-                } catch (err) { print("miner", err.toString().red) };
-            }, () => { RandomX.Stop(); setTimeout(() => connectTo(), 1000); }).then(({ host }) => { hostname = host; }).catch(err => print("net", err.toString().red))
+                    tHashes += thisHashes;
+                    Print(CYAN_BOLD(" cpu     "), `speed     ${PrintHashes(thisHashes / 60)} ${thisHashes > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(options.threads == threads ? CYAN : RED)(threads)}/${options.threads})`)}`);
+                }, 60000);
+            } catch { interval ? clearInterval(interval) : null; setTimeout(() => i(), 10000); };
         })();
+
+        process.on("SIGINT", () => {
+            Print(YELLOW_BOLD(" signal  "), WHITE_BOLD("Exiting ..."));
+            m_this.#miner.cleanup();
+            process.exit();
+        });
+
+        process.on("SIGTERM", () => {
+            Print(YELLOW_BOLD(" signal  "), WHITE_BOLD("Exiting ..."));
+            m_this.#miner.cleanup();
+            process.exit();
+        });
+
+        process.on("uncaughtException", () => {
+            Print(YELLOW_BOLD(" signal  "), WHITE_BOLD("Program Error. Exiting ..."));
+            m_this.#miner.cleanup();
+            process.exit();
+        });
     };
+
+    start = () => { this.#miner.start(); };
+    pause = () => { this.#miner.pause(); };
 };

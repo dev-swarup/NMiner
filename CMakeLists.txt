@@ -7,6 +7,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(SOURCES
     src/main.cpp
+    src/cpp/job.cpp
     src/aes_hash.cpp
     src/argon2_ref.c
     src/argon2_ssse3.c
@@ -30,7 +31,8 @@ set(SOURCES
     src/reciprocal.c
     src/virtual_machine.cpp
     src/vm_compiled_light.cpp
-    src/blake2/blake2b.c)
+    src/blake2/blake2b.c
+    src/jit_compiler_x86.cpp)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -39,34 +41,36 @@ endif()
 include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
 
-if ((CMAKE_SIZEOF_VOID_P EQUAL 8) AND (ARCH_ID STREQUAL "x86_64" OR ARCH_ID STREQUAL "x86-64" OR ARCH_ID STREQUAL "amd64"))
-    list(APPEND SOURCES
-        src/jit_compiler_x86.cpp)
+if(MSVC)
+    enable_language(ASM_MASM)
+    list(APPEND SOURCES src/jit_compiler_x86_static.asm)
 
-    if(MSVC)
-        enable_language(ASM_MASM)
-        list(APPEND SOURCES src/jit_compiler_x86_static.asm)
+    set_property(SOURCE src/jit_compiler_x86_static.asm PROPERTY LANGUAGE ASM_MASM)
+    set_source_files_properties(src/argon2_avx2.c COMPILE_FLAGS /arch:AVX2)
 
-        set_property(SOURCE src/jit_compiler_x86_static.asm PROPERTY LANGUAGE ASM_MASM)
+    set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} /DRELWITHDEBINFO")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} /DRELWITHDEBINFO")
+else()
+    list(APPEND SOURCES src/jit_compiler_x86_static.S)
 
-        set_source_files_properties(src/argon2_avx2.c COMPILE_FLAGS /arch:AVX2)
+    set_property(SOURCE src/jit_compiler_x86_static.S PROPERTY LANGUAGE C)
+    set_property(SOURCE src/jit_compiler_x86_static.S PROPERTY XCODE_EXPLICIT_FILE_TYPE sourcecode.asm)
 
-        set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} /DRELWITHDEBINFO")
-        set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} /DRELWITHDEBINFO")
-    else()
-        list(APPEND SOURCES src/jit_compiler_x86_static.S)
-
-        set_property(SOURCE src/jit_compiler_x86_static.S PROPERTY LANGUAGE C)
-        set_property(SOURCE src/jit_compiler_x86_static.S PROPERTY XCODE_EXPLICIT_FILE_TYPE sourcecode.asm)
-
-        check_c_compiler_flag(-mavx2 HAVE_AVX2)
-        check_c_compiler_flag(-mssse3 HAVE_SSSE3)
-        if(HAVE_AVX2)
-            set_source_files_properties(src/argon2_avx2.c COMPILE_FLAGS -mavx2)
-        endif()
-        if(HAVE_SSSE3)
-            set_source_files_properties(src/argon2_ssse3.c COMPILE_FLAGS -mssse3)
-        endif()
+    check_c_compiler_flag(-maes HAVE_AES)
+    check_c_compiler_flag(-mavx2 HAVE_AVX2)
+    check_c_compiler_flag(-mssse3 HAVE_SSSE3)
+    
+    if(HAVE_AES)
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -maes")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maes")
+    endif()
+    
+    if(HAVE_AVX2)
+        set_source_files_properties(src/argon2_avx2.c COMPILE_FLAGS -mavx2)
+    endif()
+    
+    if(HAVE_SSSE3)
+        set_source_files_properties(src/argon2_ssse3.c COMPILE_FLAGS -mssse3)
     endif()
 endif()
 
@@ -74,6 +78,7 @@ set(RANDOMX_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/src" CACHE STRING "RandomX Incl
 
 include_directories(${CMAKE_JS_INC})
 include_directories(${RANDOMX_INCLUDE})
+include_directories("${RANDOMX_INCLUDE}/cpp")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/node_modules/node-addon-api")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/node_modules/node-api-headers/include")
 

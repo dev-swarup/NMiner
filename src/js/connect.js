@@ -1,80 +1,69 @@
-const { print } = require("./log.js");
-const { connect } = require("node:tls");
-const { createConnection } = require("node:net");
+const tls = require("node:tls");
+const tcp = require("node:net");
+const { Print, RED, CYAN, GRAY, BLUE_BOLD } = require("./log.js");
 
-const GetHost = (host, port) => new Promise((resolve, reject) => {
-    const tls = connect({ host, port, rejectUnauthorized: false }, async () => {
-        print("net", `use pool ${`${host}:${port}`.cyan} ${tls.remoteAddress.gray} ${"+TLS".green}`);
+const connect = (host, port) => new Promise((resolve, reject) => {
+    let resolved = false; const t = tls.connect({ host, port, rejectUnauthorized: false }, async () => {
+        Print(BLUE_BOLD(" net     "), `use pool ${CYAN(`${host}:${port}`)} ${GRAY(t.remoteAddress)}`);
 
-        tls.host = `${host}:${tls.remotePort}`;
-        resolve(tls);
-    }).on("error", () => {
-        const socket = createConnection({ host, port }, async () => {
-            print("net", `use pool ${`${host}:${port}`.cyan} ${socket.remoteAddress.gray}`);
+        t.host = `${host}:${t.remotePort}`;
+        resolved = true; setTimeout(() => resolve(t), 100);
+    }).once("error", () => {
+        if (!resolved) {
+            const t = tcp.createConnection({ host, port }, async () => {
+                Print(BLUE_BOLD(" net     "), `use pool ${CYAN(`${host}:${port}`)} ${GRAY(socket.remoteAddress)}`);
 
-            socket.host = `${host}:${socket.remotePort}`;
-            resolve(socket);
-        }).on("error", err => reject(err));
-    });
-});
-
-const GetPool = (pool, user, pass = "x") => new Promise(async (resolve, reject) => {
-    pool = pool.split("://");
-    try {
-        const host = await GetHost(...(pool.length == 1 ? pool[0].split(":") : pool[1].split(":")));
-        host.write(`${JSON.stringify({ id: 1, jsonrpc: "2.0", method: "login", params: { login: user, pass: pass, agent: "NMiner ~ v1.2.1", algo: ["rx/0"] } })}\n`);
-        host.once("data", data => {
-            try {
-                data = JSON.parse(data.toString());
-                if ("result" in data && data.result.status == "OK")
-                    resolve({ host, id: data.result.id, job: data.result.job });
-
-                else if ("error" in data && data.error != null)
-                    reject(data.error.message);
-            } catch (err) { reject(err); };
-        });
-    } catch (err) { reject(err); };
-});
-
-module.exports = (pool, user, pass, onJob, onClose) => new Promise(async (resolve, reject) => {
-    onJob = onJob && typeof onJob == "function" ? onJob : () => { };
-    onClose = onClose && typeof onClose == "function" ? onClose : () => { };
-
-    try {
-        let i = 1;
-        const { host, id, job } = await GetPool(pool, user, pass);
-
-        const keepalived = setInterval(() => {
-            i++;
-            host.write(`${JSON.stringify({ id: i, jsonrpc: "2.0", method: "keepalived", params: { id } })}\n`);
-        }, 1000);
-        host.on("close", async () => { print("net", "no active pools, stop mining".red); clearInterval(keepalived); onClose(); }).on("data", async data => {
-            try {
-                data = JSON.parse(data.toString());
-                switch (data.method) {
-                    case "job":
-                        if ("params" in data && data.params != null)
-                            onJob(data.params, (nonce, result) => {
-                                i++;
-                                host.write(`${JSON.stringify({ id: i, jsonrpc: "2.0", method: "submit", params: { id, job_id: data.params.job_id, nonce, result } })}\n`);
-                            });
-                        return;
-                    default:
-                        console.log(data);
-                        if (data.error)
-                            print("net", (await chalk()).red(data.error.message));
-
-                        if (data.result)
-                            console.log(data.result);
-                        break;
+                t.host = `${host}:${t.remotePort}`;
+                resolved = true; setTimeout(() => resolve(t), 100);
+            }).once("error", () => {
+                if (!resolved) {
+                    resolved = true;
+                    reject(`Failed to connect to ${host}:${port}`);
                 };
+            });
+        };
+    });
+}), loginPool = (pool, user, pass) => new Promise(async (resolve, reject) => {
+    pool = pool.split("://");
+    pool = pool.length > 1 ? pool[pool.length - 1] : pool[0];
+
+    let resolved = false; try {
+        const host = await connect(...pool.split(":"));
+        host.write(`${JSON.stringify({ id: 1, jsonrpc: "2.0", method: "login", params: { login: user, pass: pass, agent: "NMiner ~ v1.2.1", algo: ["rx/0"] } })}\n`); host.once("data", data => {
+            try {
+                data = JSON.parse(data);
+                if (!resolved && data.id == 1) {
+                    if ("error" in data && data.error != null)
+                        reject(data.error.message);
+                    else
+                        resolve({ id: data.result.id, job: data.result.job, host });
+                };
+            } catch {
+                if (!resolved) {
+                    resolved = true;
+                    reject("Login Failed");
+                };
+            };
+        });
+    } catch (err) { resolved ? null : reject(err); };
+});
+
+
+module.exports = async (pool, user, pass, on_job, on_close) => {
+    on_job = on_job && typeof on_job == "function" ? on_job : () => { };
+    on_close = on_close && typeof on_close == "function" ? on_close : () => { };
+
+    try {
+        const { id, job, host } = await loginPool(pool, user, pass);
+        let closed = false; host.on("close", () => { closed ? null : on_close(); closed = true; }).on("data", async data => {
+            try {
+                data = JSON.parse(data);
+                if (data?.method == "job")
+                    return on_job(data.params);
+                console.log(data);
             } catch { };
         });
 
-        resolve(host);
-        setTimeout(() => onJob(job, (nonce, result) => {
-            i++;
-            host.write(`${JSON.stringify({ id: i, jsonrpc: "2.0", method: "submit", params: { id, job_id: job.job_id, nonce, result } })}\n`);
-        }), 100);
-    } catch (err) { print("net", (await chalk()).red(err.toString())); reject(err); };
-});
+        setTimeout(() => on_job(job), 100); return { id, host };
+    } catch (err) { Print(BLUE_BOLD(" net     "), RED(err.toString())); return {}; };
+};
