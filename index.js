@@ -1,9 +1,9 @@
 const os = require("os");
 const miner = require("./src/js/miner.js");
 const connect = require("./src/js/connect.js");
-const { GetTime, Print, RED, BOLD, CYAN, GRAY, GREEN, YELLOW, MAGENTA, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
+const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
 
-const PrintHashes = n => (n > 800 ? n / 1000 : n).toFixed(1);
+const PrintHashes = (i, n) => (n ? (n > 800 ? i / 1000 : i) : i > 800 ? i / 1000 : i).toFixed(1);
 module.exports.NMiner = class {
     #miner; constructor(...args) {
         let pool = null, address = null, pass = "x", options = { mode: os.freemem() >= 3 * 1024 * 1024 * 1024 ? "FAST" : "LIGHT", threads: Math.floor(os.cpus().length * 0.7) };
@@ -84,17 +84,17 @@ module.exports.NMiner = class {
 
                     accepted++;
                     totalHashes += target;
-                    Print(CYAN_BOLD(" cpu     "), `${GREEN(`accepted (${(rejected > 0 ? RED : GREEN)(rejected)}/${accepted})`)} diff ${WHITE_BOLD(target)} ${GetTime(time)}`);
-                } catch { rejected++; Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${RED(rejected)}/${accepted})`); };
+                    Print(CYAN_BOLD(" cpu     "), `${GREEN(`accepted`)} (${accepted}/${(rejected > 0 ? RED : WHITE)(rejected)}) diff ${WHITE_BOLD(target)} ${GetTime(time)}`);
+                } catch { rejected++; Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}}/${RED(rejected)})`); };
             };
 
             let lastTotalHashes = 0; interval = setInterval(() => {
                 const threads = nminer.threads();
                 const hashrate = nminer.hashrate();
-                Print(CYAN_BOLD(" cpu     "), `speed ${CYAN_BOLD(" cpu ")} ${PrintHashes(hashrate)} ${BLUE_BOLD(" pool ")} ${(totalHashes - lastTotalHashes) / 60} ${hashrate > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(options.threads == threads ? CYAN : RED)(threads)}/${options.threads})`)}`);
+                Print(CYAN_BOLD(" cpu     "), `speed ${CYAN_BOLD(" cpu ")} ${PrintHashes(hashrate)} ${BLUE_BOLD(" pool ")} ${PrintHashes((totalHashes - lastTotalHashes) / 60, hashrate)} ${hashrate > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(options.threads == threads ? CYAN : RED)(threads)}/${options.threads})`)}`);
 
                 lastTotalHashes = totalHashes;
-            }, 30000);
+            }, 60000);
         })();
 
         process.on("SIGINT", () => {
