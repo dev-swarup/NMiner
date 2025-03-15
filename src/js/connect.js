@@ -11,7 +11,7 @@ const connect = (host, port) => new Promise((resolve, reject) => {
     }).once("error", () => {
         if (!resolved) {
             const t = tcp.createConnection({ host, port }, async () => {
-                Print(BLUE_BOLD(" net     "), `use pool ${CYAN(`${host}:${port}`)} ${GRAY(socket.remoteAddress)}`);
+                Print(BLUE_BOLD(" net     "), `use pool ${CYAN(`${host}:${port}`)} ${GRAY(t.remoteAddress)}`);
 
                 t.host = `${host}:${t.remotePort}`;
                 resolved = true; setTimeout(() => resolve(t), 100);
@@ -54,16 +54,33 @@ module.exports = async (pool, user, pass, on_job, on_close) => {
     on_close = on_close && typeof on_close == "function" ? on_close : () => { };
 
     try {
-        const { id, job, host } = await loginPool(pool, user, pass);
-        let closed = false; host.on("close", () => { closed ? null : on_close(); closed = true; }).on("data", async data => {
+        let message_count = 2, message_result = {}; const { id, job, host } = await loginPool(pool, user, pass), keepalived = setInterval(async () => {
+            host.write(`${JSON.stringify({ id: message_count++, jsonrpc: "2.0", method: "keepalived", params: { id } })}\n`);
+        }, 30000);
+
+        let closed = false; host.on("end", () => { keepalived ? clearInterval(keepalived) : null; closed ? null : on_close(); closed = true; }).on("close", () => { keepalived ? clearInterval(keepalived) : null; closed ? null : on_close(); closed = true; }).on("data", async data => {
             try {
                 data = JSON.parse(data);
                 if (data?.method == "job")
                     return on_job(data.params);
-                console.log(data);
+
+                if (data.error != null && data.id in message_result) {
+                    message_result[data.id].reject(data.error.code);
+                    delete message_result[data.id];
+                };
+
+                if ("result" in data && data.error == null && data.id in message_result) {
+                    message_result[data.id].resolve(message_result[data.id].args);
+                    delete message_result[data.id];
+                };
             } catch { };
         });
 
-        setTimeout(() => on_job(job), 100); return { id, host };
-    } catch (err) { Print(BLUE_BOLD(" net     "), RED(err.toString())); return {}; };
+        setTimeout(() => on_job(job), 100); return {
+            host, submit: (job_id, nonce, result, ...args) => new Promise((resolve, reject) => {
+                let count = message_count++; message_result[count] = { resolve, reject, args };
+                host.write(`${JSON.stringify({ id: count, jsonrpc: "2.0", method: "submit", params: { id, job_id, nonce, result } })}\n`);
+            })
+        };
+    } catch (err) { Print(BLUE_BOLD(" net     "), RED(err.toString())); await (() => new Promise(resolve => setTimeout(resolve, 5000)))(); return await module.exports(pool, user, pass, on_job, on_close); };
 };

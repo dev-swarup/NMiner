@@ -20,7 +20,9 @@ module.exports = {
     CYAN: colors.cyan,
     BLUE: colors.blue,
     GRAY: colors.gray,
+    WHITE: colors.white,
     GREEN: colors.green,
+    YELLOW: colors.yellow,
     MAGENTA: colors.magenta
 };
 

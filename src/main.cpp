@@ -10,29 +10,45 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
     job *m_job = new job();
     Napi::Env env = info.Env();
     Napi::Object exports = Napi::Object::New(env);
-    if (info.Length() != 2 || !info[0].IsString() || !info[1].IsNumber())
+    if (info.Length() != 3 || !info[0].IsString() || !info[1].IsNumber() || !info[2].IsFunction())
     {
-        ThrowError(env, "Expected arguments: mode and threads");
+        ThrowError(env, "Expected arguments: mode, threads and submitFn");
         return exports;
     };
+    
+    m_job->jsSubmit = std::make_shared<Napi::FunctionReference>(std::move(Napi::Persistent(info[2].As<Napi::Function>())));
 
     std::string mode = info[0].As<Napi::String>();
     size_t threads = static_cast<size_t>(info[1].As<Napi::Number>().Uint32Value());
+
+    exports.Set("msr", Napi::Function::New(env, [](const Napi::CallbackInfo &info)
+        {
+            return Napi::Number::New(info.Env(), -1);
+        }));
+    exports.Set("lPages", Napi::Function::New(env, [](const Napi::CallbackInfo &info)
+        {
+            return Napi::Number::New(info.Env(), -1);
+        }));
+    exports.Set("hugePages", Napi::Function::New(env, [](const Napi::CallbackInfo &info)
+        {
+            return Napi::Number::New(info.Env(), -1);
+        }));
     
-    exports.Set("job", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
+    exports.Set("job", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info) mutable
         { 
             Napi::Env env = info.Env();
             Napi::Object exports = Napi::Object::New(env);
-            if (info.Length() != 3 || !info[0].IsString() || !info[1].IsString() || !info[2].IsBoolean())
+            if (info.Length() != 4 || !info[0].IsString() || !info[1].IsString() || !info[2].IsString() || !info[3].IsBoolean())
             {
-                Napi::ThrowError(env, "Expected arguments: target, blob and reset nonce");
+                Napi::ThrowError(env, "Expected arguments: job_id, target, blob and reset nonce");
                 return exports;
             };
 
-            exports.Set("diff", Napi::Number::New(env, m_job->setTarget(info[0].As<Napi::String>())));
-            exports.Set("txnCount", Napi::Number::New(env, m_job->setBlob(info[1].As<Napi::String>())));
+            m_job->job_id = info[0].As<Napi::String>();
+            exports.Set("diff", Napi::Number::New(env, m_job->setTarget(info[1].As<Napi::String>())));
+            exports.Set("txnCount", Napi::Number::New(env, m_job->setBlob(info[2].As<Napi::String>())));
 
-            if (info[2].As<Napi::Boolean>())
+            if (info[3].As<Napi::Boolean>())
                 m_job->resetNonce();
 
             return exports; 
@@ -40,9 +56,8 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
 
     exports.Set("start", Napi::Function::New(env, [mode, threads, m_job](const Napi::CallbackInfo &info) 
         {
-            if (info.Length() == 1 && info[0].IsFunction())
-                m_job->start(mode, threads, Napi::Persistent(info[0].As<Napi::Function>()));
-
+            if (info.Length() > 0)
+                m_job->start(mode, threads);
             m_job->start();
         }));
 
@@ -72,14 +87,14 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
             return Napi::Boolean::New(env, m_job->alloc(mode)); 
         }));
 
-    exports.Set("totalHashes", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
+    exports.Set("threads", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
         {
-            Napi::Object exports = Napi::Object::New(info.Env());
-
-            exports.Set("threads", Napi::Number::New(info.Env(), m_job->threads()));
-            exports.Set("totalHashes", Napi::Number::New(info.Env(), m_job->totalHashes()));
-            
-            return exports;
+            return Napi::Number::New(info.Env(), m_job->threads());
+        }));
+    
+    exports.Set("hashrate", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
+        {
+            return Napi::Number::New(info.Env(), m_job->hashrate());
         }));
     
     exports.Set("cleanup", Napi::Function::New(env, [m_job](const Napi::CallbackInfo&)

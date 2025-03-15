@@ -14,7 +14,7 @@ bool AESSupport()
 
 randomx::job::job() 
 {
-    m_vm = std::make_shared<randomx_machine>();
+    m_machine = std::make_shared<randomx_machine>();
 };
 
 randomx::job::~job() {
@@ -41,8 +41,8 @@ uint32_t randomx::job::setBlob(const std::string &blob)
     };
 
     m_nicehash = readUnaligned(nonce()) != 0;
-    for (size_t i = 0; i < m_vm->vms.size(); i++)
-        std::memcpy(m_vm->vms[i]->blob, m_blob, kMaxBlobSize);
+    for (size_t i = 0; i < m_machine->machine.size(); i++)
+        std::memcpy(m_machine->machine[i]->blob, m_blob, m_size);
 
     return num_transactions;
 };
@@ -54,7 +54,7 @@ uint64_t randomx::job::setTarget(const std::string &target)
         return 0;
 
     m_target = 0xFFFFFFFFFFFFFFFFULL / (0xFFFFFFFFULL / uint64_t(*reinterpret_cast<const uint32_t *>(raw.data())));
-    m_diff = static_cast<uint32_t>(0xFFFFFFFFFFFFFFFFULL / m_target);
+    m_diff = static_cast<uint64_t>(0xFFFFFFFFFFFFFFFFULL / m_target);
     return m_diff;
 };
 
@@ -91,7 +91,10 @@ bool randomx::job::init(const std::string &mode, size_t threads, const std::stri
     if (!m_cache || (!m_dataset && mode == "FAST"))
         return false;
 
-    randomx_init_cache(m_cache, seed_hash.c_str(), seed_hash.size());
+    if (sodium_hex2bin(m_seed, sizeof(m_seed), seed_hash.c_str(), seed_hash.size(), nullptr, nullptr, nullptr) != 0)
+        return false;
+
+    randomx_init_cache(m_cache, m_seed, sizeof(m_seed));
     if (mode == "FAST")
     {
         const uint64_t dataset_count = randomx_dataset_item_count();
@@ -134,19 +137,30 @@ bool randomx::job::init(const std::string &mode, size_t threads, const std::stri
 
 void randomx::job::pause()
 {
-    m_vm->paused = true;
+    m_machine->paused = true;
 };
 
 void randomx::job::start()
 {
-    m_vm->paused = false;
+    m_machine->paused = false;
 };
 
-size_t randomx::job::start(const std::string &mode, size_t threads, Napi::FunctionReference fn)
+int randomx::job::hashrate()
 {
-    if (m_vm->vms.size() >= 1)
-        return m_vm->vms.size();
+    int hashes = m_hashes - m_last_hashes;
+    std::chrono::milliseconds mses = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - m_last_time);
+
+    m_last_hashes = m_hashes;
+    m_last_time = std::chrono::system_clock::now();
+    return hashes / (mses.count() / 1000);
+};
+
+void randomx::job::start(const std::string &mode, size_t threads)
+{
+    if (m_machine->machine.size() >= 1)
+        return;
     
+    Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(jsSubmit->Env(), Napi::Function::New(jsSubmit->Env(), [](const Napi::CallbackInfo&) {}), "jsSubmit", 0, 1);
     for (size_t i = 0; i < threads; i++)
     {
         std::shared_ptr<t_machine> machine = std::make_shared<t_machine>();
@@ -161,37 +175,57 @@ size_t randomx::job::start(const std::string &mode, size_t threads, Napi::Functi
         if (!machine->vm)
             continue;
 
-        std::memcpy(machine->blob, m_blob, kMaxBlobSize);
-        machine->m_thread = std::thread([this, i, machine]() mutable
+        std::memcpy(machine->blob, m_blob, m_size);
+            
+        machine->nonce = i;
+        machine->m_thread = std::thread([this, i, threads, machine, tsfn]() mutable
             {
-                cpu_set_t cpuset;
-                CPU_ZERO(&cpuset);
-                CPU_SET(i % std::thread::hardware_concurrency(), &cpuset);
-                pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-
-                while (!m_vm->closed)
+                while (!m_machine->closed)
                 {
-                    if (m_vm->paused)
+                    if (m_machine->paused)
                     {
                         std::this_thread::sleep_for(std::chrono::milliseconds(500));
                         continue;
                     };
 
-                    calculate_hash(machine->vm, machine->blob, m_nonce);
+                    calculate_hash(machine->vm, machine->blob, m_size, machine->nonce, tsfn);
+                    machine->nonce += threads;
                     {
                         std::lock_guard<std::mutex> lock(m_mutex);
-                        m_nonce++;
                         m_hashes++;
                     };
                 };
             });
-        m_vm->vms.emplace_back(machine);
+        m_machine->machine.emplace_back(machine);
     };
 
-    return m_vm->vms.size();
+    m_hashes = 0;
+    m_last_hashes = 0;
 };
 
-void randomx::job::calculate_hash(randomx_vm* vm, uint8_t blob[kMaxBlobSize], uint64_t nonce)
+void randomx::job::calculate_hash(randomx_vm* vm, uint8_t blob[kMaxBlobSize], size_t size, uint32_t n, Napi::ThreadSafeFunction tsfn)
 {
+    uint8_t result[kMaxSeedSize];
+    uint32_t m_nonce = n;
 
+    std::memcpy(nonce(blob), &m_nonce, m_nicehash ? kNonceSize - 1 : kNonceSize);
+    if (m_nicehash)
+        std::memcpy(&m_nonce, reinterpret_cast<uint32_t *>(blob + kNonceOffset), kNonceSize);
+    
+    randomx_calculate_hash(vm, blob, size, result);
+    if (*reinterpret_cast<uint64_t*>(result + 24) < m_target)
+    {
+        char nonce[9];
+        if(sodium_bin2hex(nonce, sizeof(nonce), reinterpret_cast<unsigned char*>(&m_nonce), sizeof(m_nonce)) != 0)
+            return;
+
+        char result_hex[(kMaxSeedSize * 2) + 1];
+        if(sodium_bin2hex(result_hex, sizeof(result_hex), reinterpret_cast<unsigned char*>(&result), sizeof(result)) != 0)
+            return;
+
+        tsfn.BlockingCall([this, nonce, result_hex](Napi::Env env, Napi::Function)
+            {
+                jsSubmit->Call({ ToString(env, job_id), ToString(env, nonce), ToString(env, result_hex), Napi::Number::New(env, m_diff) });
+            });
+    };
 };
