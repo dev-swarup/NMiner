@@ -1,6 +1,4 @@
-#include <sched.h>
 #include <cpuid.h>
-#include <pthread.h>
 
 #include "job.h"
 
@@ -184,7 +182,7 @@ void randomx::job::start(const std::string &mode, size_t threads)
                 {
                     if (m_machine->paused)
                     {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
                         continue;
                     };
 

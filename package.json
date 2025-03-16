@@ -12,6 +12,7 @@
         "install": "node postinstall.js"
     },
     "dependencies": {
+        "ws": "^8.18.1",
         "colors": "^1.4.0",
         "cmake-js": "^7.0.0",
         "node-addon-api": "^8.3.1"
