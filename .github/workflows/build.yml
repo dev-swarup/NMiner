@@ -21,7 +21,17 @@ jobs:
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
 
           sudo apt update
-          sudo apt install -y git build-essential cmake python3 nodejs npm
+          sudo apt install -y git build-essential cmake python3
+      
+      - name: Install Node.js
+        run: |
+          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+
+          nvm install v20
+          nvm use v20
 
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -35,7 +45,17 @@ jobs:
       - name: Build NMiner
         run: |
           mkdir -p build && npm run build
-  
+
+      - name: Package NMiner
+        run: |
+          tar -czvf nminer.tar.gz package.json index.js index.d.ts LICENSE build/Release/NMiner.node src/js/*.js
+      
+      - name: Upload NMiner
+        uses: actions/upload-artifact@v4
+        with:
+          name: nminer.tar.gz
+          path: nminer.tar.gz
+
   windows:
     timeout-minutes: 30
     runs-on: ${{ matrix.config.os }}
@@ -61,7 +81,3 @@ jobs:
       - name: Install NPM dependencies
         run: |
           npm install --ignore-scripts
-
-      - name: Build NMiner
-        run: |
-          mkdir -p build && npm run build
