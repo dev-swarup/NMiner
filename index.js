@@ -43,8 +43,9 @@ module.exports.NMiner = class {
         console.log(GREEN(" * "), `${WHITE_BOLD("HUGE PAGES")}       ${(hugePages == 0 ? GREEN : hugePages == -1 ? RED : YELLOW)(hugePages == 0 ? "supported" : hugePages == -1 ? "disabled" : "restart required")}`);
 
         (async function connectTo() {
-            let interval, totalHashes = 0, temp_blob, temp_seed_hash;
+            let interval, totalHashes = 0, jobCount = 0, temp_blob, temp_seed_hash;
             const { host, submit } = await (address != null ? connect.Tcp : connect.WebSocket)(...(address != null ? [pool, address, pass] : [pool]), job => {
+                jobCount++;
                 nminer.pause();
                 const { diff, txnCount } = nminer.job(job.job_id, job.target, job.blob, temp_blob != job.blob);
                 Print(BLUE_BOLD(" net     "), `${MAGENTA("new job")} from ${host.host} diff ${WHITE_BOLD(diff)} algo ${WHITE_BOLD("rx/0")}${"height" in job ? ` height ${WHITE_BOLD(job.height)}` : ""}${txnCount > 0 ? ` (${txnCount} tx)` : ""}`);
@@ -88,7 +89,13 @@ module.exports.NMiner = class {
                 } catch { rejected++; Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}}/${RED(rejected)})`); };
             };
 
-            let lastTotalHashes = 0; interval = setInterval(() => {
+            let lastJobCount = 0, lastTotalHashes = 0; interval = setInterval(() => {
+                if (lastJobCount == jobCount) {
+                    host.end();
+                    nminer.pause();
+                };
+
+                lastJobCount = jobCount;
                 const threads = nminer.threads();
                 const hashrate = nminer.hashrate();
                 Print(CYAN_BOLD(" cpu     "), `speed ${CYAN_BOLD(" cpu ")} ${PrintHashes(hashrate)} ${BLUE_BOLD(" pool ")} ${PrintHashes((totalHashes - lastTotalHashes) / 300, hashrate)} ${hashrate > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(options.threads == threads ? CYAN : RED)(threads)}/${options.threads})`)}`);
