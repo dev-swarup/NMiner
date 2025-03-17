@@ -39,6 +39,9 @@ uint32_t randomx::job::setBlob(const std::string &blob)
     };
 
     m_nicehash = readUnaligned(nonce()) != 0;
+    if (m_nicehash)
+        std::memcpy(&m_mask, reinterpret_cast<uint8_t *>(m_blob + kNonceOffset + 3), 1);
+
     for (size_t i = 0; i < m_machine->machine.size(); i++)
         std::memcpy(m_machine->machine[i]->blob, m_blob, m_size);
 
@@ -148,7 +151,7 @@ int randomx::job::hashrate()
     int hashes = m_hashes - m_last_hashes;
     std::chrono::milliseconds mses = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - m_last_time);
 
-    m_last_hashes = m_hashes;
+    m_last_hashes += hashes;
     m_last_time = std::chrono::system_clock::now();
     return hashes / (mses.count() / 1000);
 };

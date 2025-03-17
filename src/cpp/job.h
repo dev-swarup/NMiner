@@ -152,6 +152,7 @@ namespace randomx
         randomx_dataset *m_dataset = nullptr;
         std::shared_ptr<randomx_machine> m_machine;
         
+        uint8_t m_mask;
         uint8_t m_seed[kMaxSeedSize];
         uint8_t m_blob[kMaxBlobSize];
 

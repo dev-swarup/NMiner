@@ -53,7 +53,7 @@ jobs:
       - name: Upload NMiner
         uses: actions/upload-artifact@v4
         with:
-          name: nminer.tar.gz
+          name: nminer-${{matrix.config.os}}.tar.gz
           path: nminer.tar.gz
 
   windows:
