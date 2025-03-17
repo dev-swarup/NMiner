@@ -9,30 +9,32 @@ const PrintHashes = (i, n) => (n ? (n > 800 ? i / 1000 : i) : i > 800 ? i / 1000
 module.exports.NMiner = class {
     #miner; constructor(...args) {
         let pool = null, address = null, pass = "x", options = { mode: os.freemem() >= 3 * 1024 * 1024 * 1024 ? "FAST" : "LIGHT", threads: Math.floor(os.cpus().length * 0.7) };
-        switch (true) {
-            case (args.length == 1 && typeof args[0] == "string"):
-                pool = args[0];
-                break;
-            case (args.length == 2 && typeof args[0] == "string" || typeof args[1] == "string"):
-                pool = args[0];
-                address = args[1];
-                break;
-            case (args.length == 2 && typeof args[0] == "string" || typeof args[1] == "object"):
-                pool = args[0];
-                options = { ...options, ...args[1] };
-                break
-            case (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string"):
-                pool = args[0];
-                address = args[1]; pass = args[2];
-                break;
-            case (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "object"):
-                pool = args[0];
-                address = args[1];
-                options = { ...options, ...args[2] };
-                break;
-            default:
-                throw new Error("Invalid arguments");
+        if (args.length == 1 && typeof args[0] == "string")
+            pool = args[0];
+
+        if (args.length == 2 && typeof args[0] == "string" || typeof args[1] == "string") {
+            pool = args[0];
+            address = args[1];
         };
+
+        if (args.length == 2 && typeof args[0] == "string" || typeof args[1] == "object") {
+            pool = args[0];
+            options = { ...options, ...args[1] };
+        };
+
+        if (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string") {
+            pool = args[0];
+            address = args[1]; pass = args[2];
+        };
+
+        if (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "object") {
+            pool = args[0];
+            address = args[1];
+            options = { ...options, ...args[2] };
+        };
+
+        if (pool == null)
+            throw new Error("Invalid arguments");
 
         let accepted = 0, rejected = 0, submitFn,
             nminer = this.#miner = miner.init(options.mode, options.threads, (...args) => submitFn(...args));
@@ -44,7 +46,7 @@ module.exports.NMiner = class {
 
         (async function connectTo() {
             let interval, totalHashes = 0, jobCount = 0, temp_blob, temp_seed_hash;
-            const { host, submit } = await (address != null ? connect.Tcp : connect.WebSocket)(...(address != null ? [pool, address, pass] : [pool]), job => {
+            const { host, submit } = await (pool.startsWith("ws") ? connect.WebSocket : connect.Tcp)(...(pool.startsWith("ws") ? [pool, address] : [pool, address, pass]), job => {
                 jobCount++;
                 nminer.pause();
                 const { diff, txnCount } = nminer.job(job.job_id, job.target, job.blob, temp_blob != job.blob);
@@ -130,38 +132,64 @@ module.exports.NMiner = class {
 module.exports.NMinerProxy = class {
     constructor(...args) {
         let pool = null, address = null, pass = "x", options = { port: 8080 };
-        switch (true) {
-            case (args.length == 2 && typeof args[0] == "string" || typeof args[1] == "string"):
-                pool = args[0];
-                address = args[1];
-                break;
-            case (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string"):
-                pool = args[0];
-                address = args[1]; pass = args[2];
-                break;
-            case (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "object"):
-                pool = args[0];
-                address = args[1];
-                options = { ...options, ...args[2] };
-                break;
-            case (args.length == 4 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string" && typeof args[3] == "object"):
-                pool = args[0];
-                address = args[1]; pass = args[2];
-                options = { ...options, ...args[3] };
-                break;
-            default:
-                throw new Error("Invalid arguments");
+        if (args.length == 2 && typeof args[0] == "string" || typeof args[1] == "string") {
+            pool = args[0];
+            address = args[1];
         };
 
+        if (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string") {
+            pool = args[0];
+            address = args[1]; pass = args[2];
+        };
+
+        if (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "object") {
+            pool = args[0];
+            address = args[1];
+            options = { ...options, ...args[2] };
+        };
+
+        if (args.length == 4 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string" && typeof args[3] == "object") {
+            pool = args[0];
+            address = args[1]; pass = args[2];
+            options = { ...options, ...args[3] };
+        };
+
+        if (pool == null && address == null)
+            throw new Error("Invalid arguments");
+
         (new WebSocketServer({ host: "0.0.0.0", port: options.port })).on("connection", async WebSocket => {
-            let t, temp_job, submitFn, logged = false;
-            WebSocket.on("close", () => host.end()).on("message", async data => {
+            let t, submitFn, logged = false;
+            WebSocket.on("close", () => { t ? t.end() : null; }).on("message", async data => {
                 try {
                     data = JSON.parse(data.toString());
                     if (data[0] == "login") {
-                        logged = true;
-                        if (temp_job)
-                            WebSocket.send(JSON.stringify(["login", temp_job]));
+                        let m_pool = null, m_address = null, m_pass = "x";
+                        if ("onConnection" in options) {
+                            const tn = await options.onConnection(data[1]);
+                            if (tn == true) {
+                                m_pool = pool;
+                                m_pass = pass;
+                                m_address = address;
+                            } else if (typeof tn == "object" && "pool" in tn && "address" in tn) {
+                                m_pool = tn.pool;
+                                m_pass = tn.pass || null; m_address = tn.address;
+                            } else {
+                                WebSocket.send(JSON.stringify(["login", false]));
+                                WebSocket.close();
+                            };
+                        } else {
+                            m_pool = pool;
+                            m_pass = pass;
+                            m_address = address;
+                        };
+
+                        const { host, submit } = await connect.Tcp(m_pool, m_address, m_pass, job => {
+                            if (!logged) {
+                                WebSocket.send(JSON.stringify(["login", job]));
+                                logged = true;
+                            } else
+                                WebSocket.send(JSON.stringify(["job", job]));
+                        }, () => WebSocket.close()); t = host; submitFn = submit;
                     } else if (data[0] == "submit")
                         try {
                             await submitFn(data[1].job_id, data[1].nonce, data[1].result);
@@ -169,21 +197,13 @@ module.exports.NMinerProxy = class {
                             Print(CYAN_BOLD(" miner   "), GREEN("accepted"));
                             WebSocket.send(JSON.stringify(["result", "accepted", data[2]]));
                         } catch {
-                            Print(CYAN_BOLD(" miner   "), GREEN("rejected"));
+                            Print(CYAN_BOLD(" miner   "), RED("rejected"));
                             WebSocket.send(JSON.stringify(["result", "rejected", data[2]]));
                         }
                     else if (data[0] == "keepalive")
                         WebSocket.send(JSON.stringify(["keepalived"]))
                 } catch { };
             });
-
-            const { host, submit } = await connect.Tcp(pool, address, pass, job => {
-                if (logged && !temp_job) {
-                    temp_job = job;
-                    WebSocket.send(JSON.stringify(["login", job]));
-                } else if (logged && temp_job)
-                    WebSocket.send(JSON.stringify(["job", job]));
-            }, () => WebSocket.close()); t = host; submitFn = submit;
         });
     };
 };

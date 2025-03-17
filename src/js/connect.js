@@ -24,8 +24,8 @@ const Tcp = (host, port) => new Promise((resolve, reject) => {
             });
         };
     });
-}), WebSocket = address => new Promise((resolve, reject) => {
-    let resolved = false; const t = (new Socket(address)).once("open", () => t.send(JSON.stringify(["login"]))).once("message", data => {
+}), WebSocket = (pool, address) => new Promise((resolve, reject) => {
+    let resolved = false; const t = (new Socket(pool)).once("open", () => t.send(JSON.stringify(["login", address]))).once("message", data => {
         try {
             data = JSON.parse(data.toString());
             if (data[0] == "login" && typeof data[1] == "object") {
@@ -120,12 +120,12 @@ module.exports.Tcp = async (pool, user, pass, on_job, on_close) => {
     } catch (err) { Print(BLUE_BOLD(" net     "), RED(err.toString())); await (() => new Promise(resolve => setTimeout(resolve, 5000)))(); return await module.exports.Tcp(pool, user, pass, on_job, on_close); };
 };
 
-module.exports.WebSocket = async (address, on_job, on_close) => {
+module.exports.WebSocket = async (pool, address, on_job, on_close) => {
     on_job = on_job && typeof on_job == "function" ? on_job : () => { };
     on_close = on_close && typeof on_close == "function" ? on_close : () => { };
 
     try {
-        let message_count = 0, message_result = {}; const { job, host } = await WebSocket(address), keepalived = setInterval(async () => {
+        let message_count = 0, message_result = {}; const { job, host } = await WebSocket(pool, address), keepalived = setInterval(async () => {
             host.send(`${JSON.stringify(["keepalive"])}`);
         }, 30000);
 
@@ -154,5 +154,5 @@ module.exports.WebSocket = async (address, on_job, on_close) => {
                 host.send(`${JSON.stringify(["submit", { job_id, nonce, result }, count])}\n`);
             })
         };
-    } catch (err) { Print(BLUE_BOLD(" net     "), RED(err.toString())); await (() => new Promise(resolve => setTimeout(resolve, 5000)))(); return await module.exports.WebSocket(address, on_job, on_close); };
+    } catch (err) { Print(BLUE_BOLD(" net     "), RED(err.toString())); await (() => new Promise(resolve => setTimeout(resolve, 5000)))(); return await module.exports.WebSocket(pool, address, on_job, on_close); };
 };

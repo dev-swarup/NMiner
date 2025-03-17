@@ -5,6 +5,6 @@ export class NMiner {
 };
 
 export class NMinerProxy {
-    constructor(pool: string, address: string, options?: { port?: number });
-    constructor(pool: string, address: string, pass?: string, options?: { port?: number });
+    constructor(pool: string, address: string, options?: { port?: number, onConnection?: (user: string) => Promise<boolean | { pool: string, address: string, pass?: string }> });
+    constructor(pool: string, address: string, pass?: string, options?: { port?: number, onConnection?: (user: string) => Promise<boolean | { pool: string, address: string, pass?: string }> });
 };
