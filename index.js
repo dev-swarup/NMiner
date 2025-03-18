@@ -8,7 +8,7 @@ const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, BL
 const PrintHashes = (i, n) => (n ? (n > 800 ? i / 1000 : i) : i > 800 ? i / 1000 : i).toFixed(1);
 module.exports.NMiner = class {
     #miner; constructor(...args) {
-        let pool = null, address = null, pass = "x", options = { mode: os.freemem() >= 3 * 1024 * 1024 * 1024 ? "FAST" : "LIGHT", threads: Math.floor(os.cpus().length * 0.7) };
+        let pool = null, address = null, pass = "x", options = { mode: os.freemem() >= 3 * 1024 * 1024 * 1024 ? "FAST" : "LIGHT", threads: Math.floor(os.cpus().length * 0.8) };
         if (args.length == 1 && typeof args[0] == "string")
             pool = args[0];
 
@@ -88,11 +88,11 @@ module.exports.NMiner = class {
                     accepted++;
                     totalHashes += target;
                     Print(CYAN_BOLD(" cpu     "), `${GREEN(`accepted`)} (${accepted}/${(rejected > 0 ? RED : WHITE)(rejected)}) diff ${WHITE_BOLD(target)} ${GetTime(time)}`);
-                } catch { rejected++; Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}}/${RED(rejected)})`); };
+                } catch { console.log(temp_blob, args[0]); rejected++; Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}/${RED(rejected)})`); };
             };
 
             let lastJobCount = 0, lastTotalHashes = 0; interval = setInterval(() => {
-                if (lastJobCount == jobCount) {
+                if (lastJobCount == jobCount && !pool.startsWith("ws")) {
                     host.end();
                     nminer.pause();
                 };
@@ -100,10 +100,10 @@ module.exports.NMiner = class {
                 lastJobCount = jobCount;
                 const threads = nminer.threads();
                 const hashrate = nminer.hashrate();
-                Print(CYAN_BOLD(" cpu     "), `speed ${CYAN_BOLD(" cpu ")} ${PrintHashes(hashrate)} ${BLUE_BOLD(" pool ")} ${PrintHashes((totalHashes - lastTotalHashes) / 300, hashrate)} ${hashrate > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(options.threads == threads ? CYAN : RED)(threads)}/${options.threads})`)}`);
+                Print(CYAN_BOLD(" cpu     "), `speed ${CYAN_BOLD(" cpu ")} ${PrintHashes(hashrate)} ${BLUE_BOLD(" pool ")} ${PrintHashes((totalHashes - lastTotalHashes) / 60, hashrate)} ${hashrate > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(options.threads == threads ? CYAN : RED)(threads)}/${options.threads})`)}`);
 
                 lastTotalHashes = totalHashes;
-            }, 5 * 60000);
+            }, 60000);
         })();
 
         process.on("SIGINT", () => {

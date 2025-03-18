@@ -1,4 +1,5 @@
 #include <cpuid.h>
+#include <sys/mman.h>
 
 #include "job.h"
 
@@ -8,6 +9,16 @@ bool AESSupport()
     if (__get_cpuid(1, &eax, &ebx, &ecx, &edx))
         return (ecx & bit_AES) != 0;
     return false;
+};
+
+bool LargePagesSupport()
+{
+    void* ptr = mmap(nullptr, 2 * 1024 * 1024, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+    if (ptr == MAP_FAILED)
+        return false;
+
+    munmap(ptr, 2 * 1024 * 1024);
+    return true;
 };
 
 randomx::job::job() 
@@ -50,11 +61,11 @@ uint32_t randomx::job::setBlob(const std::string &blob)
 
 uint64_t randomx::job::setTarget(const std::string &target)
 {
-    std::vector<uint8_t> raw(target.size() / 2);
-    if (sodium_hex2bin(raw.data(), raw.size(), target.c_str(), target.size(), nullptr, nullptr, nullptr) != 0)
+    uint8_t raw[4];
+    if (sodium_hex2bin(raw, sizeof(raw), target.c_str(), target.size(), nullptr, nullptr, nullptr) != 0)
         return 0;
 
-    m_target = 0xFFFFFFFFFFFFFFFFULL / (0xFFFFFFFFULL / uint64_t(*reinterpret_cast<const uint32_t *>(raw.data())));
+    m_target = 0xFFFFFFFFFFFFFFFFULL / (0xFFFFFFFFULL / uint64_t(*reinterpret_cast<const uint32_t *>(raw)));
     m_diff = static_cast<uint64_t>(0xFFFFFFFFFFFFFFFFULL / m_target);
     return m_diff;
 };
@@ -73,7 +84,14 @@ bool randomx::job::alloc(const std::string &mode)
         m_cache = nullptr;
     };
 
-    m_cache = randomx_alloc_cache(RANDOMX_FLAG_JIT | RANDOMX_FLAG_HARD_AES | RANDOMX_FLAG_SECURE | RANDOMX_FLAG_ARGON2);
+    randomx_flags flags = RANDOMX_FLAG_JIT | RANDOMX_FLAG_SECURE | RANDOMX_FLAG_ARGON2;
+    if (AESSupport())
+        flags |= RANDOMX_FLAG_HARD_AES;
+
+    if (LargePagesSupport())
+        flags |= RANDOMX_FLAG_LARGE_PAGES;
+
+    m_cache = randomx_alloc_cache(flags);
     if (!m_cache)
         return false;
 
@@ -149,11 +167,11 @@ void randomx::job::start()
 int randomx::job::hashrate()
 {
     int hashes = m_hashes - m_last_hashes;
-    std::chrono::milliseconds mses = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - m_last_time);
+    int duration = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last_time).count();
 
     m_last_hashes += hashes;
     m_last_time = std::chrono::system_clock::now();
-    return hashes / (mses.count() / 1000);
+    return hashes / duration;
 };
 
 void randomx::job::start(const std::string &mode, size_t threads)
@@ -189,8 +207,12 @@ void randomx::job::start(const std::string &mode, size_t threads)
                         continue;
                     };
 
-                    calculate_hash(machine->vm, machine->blob, m_size, machine->nonce, tsfn);
-                    machine->nonce += threads;
+                    calculate_hash(machine->vm, machine->blob, m_size, m_nicehash ? machine->nonce : machine->nonce & 0xFFFFFF, tsfn);
+                    if (m_nicehash)
+                        machine->nonce = (machine->nonce + threads) & 0xFFFFFF;
+                    else
+                        machine->nonce += threads;
+
                     {
                         std::lock_guard<std::mutex> lock(m_mutex);
                         m_hashes++;
@@ -206,12 +228,12 @@ void randomx::job::start(const std::string &mode, size_t threads)
 
 void randomx::job::calculate_hash(randomx_vm* vm, uint8_t blob[kMaxBlobSize], size_t size, uint32_t n, Napi::ThreadSafeFunction tsfn)
 {
-    uint8_t result[kMaxSeedSize];
     uint32_t m_nonce = n;
-
-    std::memcpy(nonce(blob), &m_nonce, m_nicehash ? kNonceSize - 1 : kNonceSize);
     if (m_nicehash)
-        std::memcpy(&m_nonce, reinterpret_cast<uint32_t *>(blob + kNonceOffset), kNonceSize);
+        m_nonce = (n & 0xFFFFFF) | (m_mask << 24);
+
+    uint8_t result[kMaxSeedSize];
+    std::memcpy(nonce(blob), &m_nonce, sizeof(m_nonce));
     
     randomx_calculate_hash(vm, blob, size, result);
     if (*reinterpret_cast<uint64_t*>(result + 24) < m_target)

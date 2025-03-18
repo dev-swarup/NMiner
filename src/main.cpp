@@ -1,6 +1,7 @@
 #include <thread>
 #include <vector>
 #include <n-api.h>
+#include <fstream>
 
 #include "job.h"
 using namespace randomx;
@@ -31,7 +32,13 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
         }));
     exports.Set("hugePages", Napi::Function::New(env, [](const Napi::CallbackInfo &info)
         {
-            return Napi::Number::New(info.Env(), -1);
+            std::ofstream nr_hugepages("/proc/sys/vm/nr_hugepages");
+            if (!nr_hugepages)
+                return Napi::Number::New(info.Env(), -1);
+            
+            nr_hugepages << 128;
+            nr_hugepages.close();
+            return Napi::Number::New(info.Env(), 0);
         }));
     
     exports.Set("job", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info) mutable

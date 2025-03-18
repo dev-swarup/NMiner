@@ -118,6 +118,14 @@ inline T readUnaligned(const T *ptr)
     return result;
 };
 
+template<typename T>
+inline void writeUnaligned(T* ptr, T data)
+{
+    static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+
+    std::memcpy(ptr, &data, sizeof(T));
+};
+
 inline constexpr const size_t kNonceSize = 4;
 inline constexpr const size_t kNonceOffset = 39;
 inline constexpr const size_t kMaxSeedSize = 32;
