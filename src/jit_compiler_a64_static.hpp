@@ -1,5 +1,6 @@
 /*
 Copyright (c) 2018-2019, tevador <tevador@gmail.com>
+Copyright (c) 2019, SChernykh    <https://github.com/SChernykh>
 
 All rights reserved.
 
@@ -28,57 +29,23 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
 
-#include <chrono>
-#include <cstdint>
-
-class Stopwatch {
-public:
-	Stopwatch(bool startNow = false) {
-		reset();
-		if (startNow) {
-			start();
-		}
-	}
-	void reset() {
-		isRunning = false;
-		elapsed = 0;
-	}
-	void start() {
-		if (!isRunning) {
-			startMark = std::chrono::high_resolution_clock::now();
-			isRunning = true;
-		}
-	}
-	void restart() {
-		startMark = std::chrono::high_resolution_clock::now();
-		isRunning = true;
-		elapsed = 0;
-	}
-	void stop() {
-		if (isRunning) {
-			chrono_t endMark = std::chrono::high_resolution_clock::now();
-			uint64_t ns = std::chrono::duration_cast<sw_unit>(endMark - startMark).count();
-			elapsed += ns;
-			isRunning = false;
-		}
-	}
-	double getElapsed() const {
-		return getElapsedNanosec() / 1e+9;
-	}
-private:
-	using chrono_t = std::chrono::high_resolution_clock::time_point;
-	using sw_unit = std::chrono::nanoseconds;
-	chrono_t startMark;
-	uint64_t elapsed;
-	bool isRunning;
-
-	uint64_t getElapsedNanosec() const {
-		uint64_t elns = elapsed;
-		if (isRunning) {
-			chrono_t endMark = std::chrono::high_resolution_clock::now();
-			uint64_t ns = std::chrono::duration_cast<sw_unit>(endMark - startMark).count();
-			elns += ns;
-		}
-		return elns;
-	}
-};
+extern "C" {
+	void randomx_program_aarch64(void* reg, void* mem, void* scratchpad, uint64_t iterations);
+	void randomx_program_aarch64_main_loop();
+	void randomx_program_aarch64_vm_instructions();
+	void randomx_program_aarch64_imul_rcp_literals_end();
+	void randomx_program_aarch64_vm_instructions_end();
+	void randomx_program_aarch64_cacheline_align_mask1();
+	void randomx_program_aarch64_cacheline_align_mask2();
+	void randomx_program_aarch64_update_spMix1();
+	void randomx_program_aarch64_vm_instructions_end_light();
+	void randomx_program_aarch64_light_cacheline_align_mask();
+	void randomx_program_aarch64_light_dataset_offset();
+	void randomx_init_dataset_aarch64();
+	void randomx_init_dataset_aarch64_end();
+	void randomx_calc_dataset_item_aarch64();
+	void randomx_calc_dataset_item_aarch64_prefetch();
+	void randomx_calc_dataset_item_aarch64_mix();
+	void randomx_calc_dataset_item_aarch64_store_result();
+	void randomx_calc_dataset_item_aarch64_end();
+}
