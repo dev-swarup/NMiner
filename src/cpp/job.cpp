@@ -248,7 +248,7 @@ void randomx::job::calculate_hash(randomx_vm* vm, uint8_t blob[kMaxBlobSize], si
 
         tsfn.BlockingCall([this, nonce, result_hex](Napi::Env env, Napi::Function)
             {
-                jsSubmit->Call({ ToString(env, job_id), ToString(env, nonce), ToString(env, result_hex), Napi::Number::New(env, m_diff) });
+                jsSubmit->Call({ ToString(env, job_id), ToString(env, nonce), ToString(env, result_hex), ToNumber(env, m_diff) });
             });
     };
 };

@@ -1,8 +1,10 @@
 #include <mutex>
 #include <chrono>
+#include <thread>
 #include <cstring>
 #include <cstdint>
-#include <n-api.h>
+
+#include <main.h>
 #include <randomx.h>
 
 static int sodium_bin2hex(char *const hex, const size_t hex_maxlen, const unsigned char *const bin, const size_t bin_len)

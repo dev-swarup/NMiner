@@ -1,9 +1,9 @@
 #include <thread>
 #include <vector>
-#include <n-api.h>
 #include <fstream>
 
 #include "job.h"
+#include "main.h"
 using namespace randomx;
 
 Napi::Object InitFn(const Napi::CallbackInfo &info)
@@ -22,23 +22,19 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
     std::string mode = info[0].As<Napi::String>();
     size_t threads = static_cast<size_t>(info[1].As<Napi::Number>().Uint32Value());
 
-    exports.Set("msr", Napi::Function::New(env, [](const Napi::CallbackInfo &info)
-        {
-            return Napi::Number::New(info.Env(), -1);
-        }));
     exports.Set("lPages", Napi::Function::New(env, [](const Napi::CallbackInfo &info)
         {
-            return Napi::Number::New(info.Env(), -1);
+            return ToNumber(info.Env(), -1);
         }));
     exports.Set("hugePages", Napi::Function::New(env, [](const Napi::CallbackInfo &info)
         {
             std::ofstream nr_hugepages("/proc/sys/vm/nr_hugepages");
             if (!nr_hugepages)
-                return Napi::Number::New(info.Env(), -1);
+                return ToNumber(info.Env(), -1);
             
             nr_hugepages << 128;
             nr_hugepages.close();
-            return Napi::Number::New(info.Env(), 0);
+            return ToNumber(info.Env(), 0);
         }));
     
     exports.Set("job", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info) mutable
@@ -52,8 +48,8 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
             };
 
             m_job->job_id = info[0].As<Napi::String>();
-            exports.Set("diff", Napi::Number::New(env, m_job->setTarget(info[1].As<Napi::String>())));
-            exports.Set("txnCount", Napi::Number::New(env, m_job->setBlob(info[2].As<Napi::String>())));
+            exports.Set("diff", ToNumber(env, m_job->setTarget(info[1].As<Napi::String>())));
+            exports.Set("txnCount", ToNumber(env, m_job->setBlob(info[2].As<Napi::String>())));
 
             if (info[3].As<Napi::Boolean>())
                 m_job->resetNonce();
@@ -90,18 +86,17 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
 
     exports.Set("alloc", Napi::Function::New(env, [mode, m_job](const Napi::CallbackInfo &info)
         {
-            Napi::Env env = info.Env();
-            return Napi::Boolean::New(env, m_job->alloc(mode)); 
+            return Napi::Boolean::New(info.Env(), m_job->alloc(mode)); 
         }));
 
     exports.Set("threads", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
         {
-            return Napi::Number::New(info.Env(), m_job->threads());
+            return ToNumber(info.Env(), m_job->threads());
         }));
     
     exports.Set("hashrate", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
         {
-            return Napi::Number::New(info.Env(), m_job->hashrate());
+            return ToNumber(info.Env(), m_job->hashrate());
         }));
     
     exports.Set("cleanup", Napi::Function::New(env, [m_job](const Napi::CallbackInfo&)

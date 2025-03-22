@@ -1,12 +1,14 @@
 #pragma once
-
 #include <napi.h>
-#include <string>
-#include <vector>
-#include <thread>
-#include <functional>
 
-inline Napi::String ToString(Napi::Env env, const std::string &str)
+template <typename T>
+inline Napi::Number ToNumber(Napi::Env env, T n)
+{
+    return Napi::Number::New(env, n);
+};
+
+template <typename T>
+inline Napi::String ToString(Napi::Env env, T str)
 {
     return Napi::String::New(env, str);
 };

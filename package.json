@@ -1,7 +1,4 @@
 {
-    "name": "NMiner",
-    "version": "v1.0.0",
-    "description": "Silent RandomX CPU Miner",
     "main": "index.js",
     "typings": "index.d.ts",
     "directories": {
@@ -14,8 +11,10 @@
     "dependencies": {
         "ws": "^8.18.1",
         "colors": "^1.4.0",
+        "deasync": "^0.1.30",
         "cmake-js": "^7.0.0",
-        "node-addon-api": "^8.3.1"
+        "node-addon-api": "^8.3.1",
+        "systeminformation": "^5.25.11"
     },
     "engines": {
         "node": ">=18.0.0"
