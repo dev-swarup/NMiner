@@ -86,7 +86,7 @@ const init = url => new Promise(async (resolve, reject) => {
                             return promises.delete(i);
 
                         if (promises.has(i)) {
-                            promises.delete(i); reject("Request Timeout");
+                            promises.delete(i); reject("30s Timeout");
                         };
                     }, 30000)
                 });

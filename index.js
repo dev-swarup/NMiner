@@ -7,7 +7,7 @@ const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, BL
 
 const PrintHashes = (i, n) => (n ? (n > 800 ? i / 1000 : i) : i > 800 ? i / 1000 : i).toFixed(1);
 module.exports.NMiner = class {
-    #miner; constructor(...args) {
+    constructor(...args) {
         let pool = null, address = null, pass = "x", options = { mode: null, threads: null };
         if (args.length == 1 && typeof args[0] == "string")
             pool = args[0];
@@ -44,10 +44,9 @@ module.exports.NMiner = class {
         if (pool == null)
             throw new Error("Invalid arguments");
 
-        let accepted = 0, rejected = 0, submitFn,
-            nminer = this.#miner = miner.init(options.mode, options.threads, (...args) => submitFn(...args));
+        let accepted = 0, rejected = 0, submitFn, nminer = miner.init(options.mode, options.threads, (...args) => submitFn(...args));
 
-        const lPages = this.#miner.lPages(), hugePages = this.#miner.hugePages();
+        const lPages = nminer.lPages(), hugePages = nminer.hugePages();
         console.log(GREEN(" * "), `${WHITE_BOLD("1GB PAGES")}        ${(lPages == 0 ? GREEN : lPages == -1 ? RED : YELLOW)(lPages == 0 ? "supported" : lPages == -1 ? "disabled" : "restart required")}`);
         console.log(GREEN(" * "), `${WHITE_BOLD("HUGE PAGES")}       ${(hugePages == 0 ? GREEN : hugePages == -1 ? RED : YELLOW)(hugePages == 0 ? "supported" : hugePages == -1 ? "disabled" : "restart required")}`);
 
@@ -133,7 +132,8 @@ module.exports.NMiner = class {
 };
 
 module.exports.NMinerProxy = class {
-    #miner; constructor(pools = [], options = { port: 8080 }) {
+    constructor(pools = [], options) {
+
         pools = pools.filter(pool => typeof pool.url == "string" && typeof pool.address == "string");
 
         if (pools.length > 1)
@@ -142,17 +142,18 @@ module.exports.NMinerProxy = class {
         if (typeof pools != "object" || pools.length <= 0)
             throw new Error("Atleast, One Pool is required");
 
-        if (typeof options != "object" || !("port" in options))
-            throw new Error("Invalid arguments");
-
+        options = { port: 8080, ...(typeof options == "object" ? options : {}) };
         (new WebSocketServer({ host: "0.0.0.0", port: options.port })).on("connection", async WebSocket => {
             WebSocket.on("close", () => {
 
             }).on("message", async data => {
                 try {
-                    const [id, method, ...params] = JSON.parse(data.toString());
+                    const [id, method, params] = JSON.parse(data.toString()); switch (method) {
+                        case "login":
 
-                    console.log(id, method, params);
+                        default:
+                            console.log(id, method, params);
+                    };
                 } catch { };
             });
         });
