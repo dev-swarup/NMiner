@@ -22,10 +22,23 @@ module.exports.NMiner = class {
             options = { ...options, ...args[1] };
         };
 
+        if (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string") {
+            pool = args[0];
+            pass = args[2];
+            address = args[1];
+        };
+
         if (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "object") {
             pool = args[0];
             address = args[1];
             options = { ...options, ...args[2] };
+        };
+
+        if (args.length == 4 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string" && typeof args[3] == "object") {
+            pool = args[0];
+            pass = args[2];
+            address = args[1];
+            options = { ...options, ...args[3] };
         };
 
         if (pool == null)
@@ -39,7 +52,7 @@ module.exports.NMiner = class {
         console.log(GREEN(" * "), `${WHITE_BOLD("HUGE PAGES")}       ${(hugePages == 0 ? GREEN : hugePages == -1 ? RED : YELLOW)(hugePages == 0 ? "supported" : hugePages == -1 ? "disabled" : "restart required")}`);
 
         (function connectTo() {
-            let interval, totalHashes = 0, jobCount = 0, temp_blob, temp_seed_hash; try {
+            let totalHashes = 0, jobCount = 0, temp_blob, temp_seed_hash; try {
                 const { host, remoteHost, submit, close, reconnect } = connectSync(pool, pool.startsWith("ws") ? [address, miner.name, nminer.uThreads] : address, pass, async job => {
                     jobCount++;
                     nminer.pause();
@@ -87,7 +100,7 @@ module.exports.NMiner = class {
                     } catch (err) { rejected++; Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}/${RED(rejected)}) ${err}`); };
                 };
 
-                let lastJobCount = 0, lastTotalHashes = 0; interval = setInterval(() => {
+                let lastJobCount = 0, lastTotalHashes = 0; setInterval(() => {
                     if (lastJobCount == jobCount) {
                         close();
                         nminer.pause();
