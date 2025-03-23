@@ -9,5 +9,10 @@ export class NMiner {
 };
 
 export class NMinerProxy {
-    constructor(pools: Array<{ url: string, address?: string, pass?: string, share?: number }>, options?: { port?: number, onConnection?: (user: string) => Promise<boolean> });
+    constructor(pool: {
+        url: string;
+        pass?: string;
+        address: string;
+        soloMine?: { url: string, address: string, pass?: string, share?: number }
+    }, options?: { port?: number, onConnection?: (user: string) => Promise<boolean> });
 };
