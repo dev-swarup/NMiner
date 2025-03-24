@@ -1,6 +1,6 @@
 const os = require("os");
 const miner = require("./src/js/miner.js");
-const { connect, multiConnect } = require("./src/js/pool.js");
+const { connect } = require("./src/js/pool.js");
 
 const { WebSocketServer } = require("ws");
 const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
@@ -50,9 +50,9 @@ module.exports.NMiner = class {
         console.log(GREEN(" * "), `${WHITE_BOLD("1GB PAGES")}        ${(lPages == 0 ? GREEN : lPages == -1 ? RED : YELLOW)(lPages == 0 ? "supported" : lPages == -1 ? "disabled" : "restart required")}`);
         console.log(GREEN(" * "), `${WHITE_BOLD("HUGE PAGES")}       ${(hugePages == 0 ? GREEN : hugePages == -1 ? RED : YELLOW)(hugePages == 0 ? "supported" : hugePages == -1 ? "disabled" : "restart required")}`);
 
-        (function connectTo() {
+        (async function connectTo() {
             let totalHashes = 0, jobCount = 0, temp_blob, temp_seed_hash; try {
-                p = connect(pool, pool.startsWith("ws") ? [address, miner.name, nminer.uThreads] : address, pass, async job => {
+                p = await connect(pool, pool.startsWith("ws") ? [address, miner.name, nminer.uThreads] : address, pass, async job => {
                     jobCount++;
                     nminer.pause();
                     const { diff, txnCount } = nminer.job(job.job_id, job.target, job.blob, temp_blob != job.blob);
@@ -121,7 +121,7 @@ module.exports.NMiner = class {
         process.on("SIGTERM", () => { nminer.cleanup(); process.exit(); });
 
         process.on("uncaughtException", err => {
-            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err.message}`);
+            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err}`);
             nminer.cleanup();
 
             if (p)
@@ -129,7 +129,7 @@ module.exports.NMiner = class {
         });
 
         process.on("unhandledRejection", err => {
-            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err.message}`);
+            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err}`);
             nminer.cleanup();
 
             if (p)
@@ -177,27 +177,80 @@ module.exports.NMinerProxy = class {
             throw new Error("Invalid arguments");
 
         const WebSocket = (new WebSocketServer({ host: "0.0.0.0", port: options.port })).on("connection", async WebSocket => {
-            WebSocket.on("close", () => {
-
+            let socket = null, logged = false, accepted = 0, rejected = 0; WebSocket.on("close", () => {
+                if (socket)
+                    socket.close();
+                Print(BLUE_BOLD(" net     "), RED("miner disconnected, closing socket."));
             }).on("message", async data => {
                 try {
                     const [id, method, params] = JSON.parse(data.toString()); switch (method) {
-                        default:
-                            console.log(id, method, params);
+                        case "login":
+                            let result = { pool, address, pass };
+                            const [[addr, cpu, threads], x] = params;
+
+                            if ("onConnection" in options) {
+                                let resp = await options.onConnection(addr, x, cpu, threads);
+                                if ((typeof resp == "boolean" && !resp) || (typeof resp == "object" && !("pool" in resp)))
+                                    return WebSocket.send(JSON.stringify([id, "Invalid Login", null]));
+                                else if (typeof resp == "object")
+                                    result = resp;
+                            };
+
+                            try {
+                                socket = await connect(result.pool, result.address, result.pass, job => {
+                                    if (!logged) {
+                                        WebSocket.send(JSON.stringify([id, null, { id: 0, job }]));
+                                        logged = true;
+                                        return;
+                                    };
+
+                                    WebSocket.send(JSON.stringify(["job", job]));
+                                }, () => {
+                                    WebSocket.close();
+                                    Print(BLUE_BOLD(" net     "), RED("pool disconnected, stop mining"));
+                                }, () => { Print(BLUE_BOLD(" net     "), `${WHITE_BOLD(threads)} @ ${WHITE_BOLD(cpu)}, connected`); });
+                            } catch { };
+
+                            break;
+
+                        case "submit":
+                            if (socket) {
+                                let time = (new Date()).getTime(); try {
+                                    const target = await socket.submit(...params, null);
+
+                                    accepted++;
+                                    WebSocket.send(JSON.stringify([id, null, "OK"]));
+                                    Print(CYAN_BOLD(" cpu     "), `${GREEN(`accepted`)} (${accepted}/${(rejected > 0 ? RED : WHITE)(rejected)}) ${GetTime(time)}`);
+                                } catch (err) {
+                                    console.log(err);
+                                    rejected++;
+                                    WebSocket.send(JSON.stringify([id, err, null]));
+                                    Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}/${RED(rejected)})`);
+                                };
+                            } else {
+                                rejected++;
+                                WebSocket.send(JSON.stringify([id, "Pool not connected", null]));
+                                Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}/${RED(rejected)})`);
+                            };
+                            break;
+
+                        case "keepalived":
+                            WebSocket.send(JSON.stringify([id, null, { status: "OK" }]));
+                            break;
                     };
-                } catch { };
+                } catch (err) { Print(YELLOW_BOLD(" signal  "), "Program Error: " + err); };
             });
         }).on("listening", () => {
             Print(BLUE_BOLD(" net     "), `listening on ${options.port}`);
         });
 
         process.on("uncaughtException", err => {
-            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err.message}`);
+            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err}`);
             WebSocket.close();
         });
 
         process.on("unhandledRejection", err => {
-            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err.message}`);
+            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err}`);
             WebSocket.close();
         });
     };

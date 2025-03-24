@@ -118,21 +118,21 @@ const multiConnect = (url, address, pass = "x", on_job = () => { }, on_close = (
                 };
 
                 setTimeout(() => { on_connect(i); on_job(i, { job_id: job.job_id, seed_hash: job.seed_hash, target: job.target, blob: job.blob, ...("height" in job ? { height: job.height } : {}) }); }, 500);
-            }).catch(err => reject(err));
+            }).catch(err => { reject(err); pool.close(i); });
         });
 
         pool.on("job", (job, i) => on_job(i, { job_id: job.job_id, seed_hash: job.seed_hash, target: job.target, blob: job.blob, ...("height" in job ? { height: job.height } : {}) })).on("close", async i => {
-            if (!sessions[i].closed) {
+            if (i in sessions && !sessions[i].closed) {
                 if (sessions[i].interval)
                     clearInterval(sessions[i].interval);
-
-                if (await on_close(i))
-                    setTimeout(async () => {
-                        try {
-                            await pool.connect(i); await Fn(i);
-                        } catch (err) { log.Print(log.BLUE_BOLD(" net     "), log.RED(err)); setTimeout(() => pool.close(i), 10000); };
-                    }, 10000);
             };
+
+            if (await on_close(i))
+                setTimeout(async () => {
+                    try {
+                        await pool.connect(i); await Fn(i);
+                    } catch (err) { log.Print(log.BLUE_BOLD(" net     "), log.RED(err)); setTimeout(() => pool.close(i), 10000); };
+                }, 10000);
         });
 
         await Fn(0); resolve({
@@ -149,7 +149,7 @@ const multiConnect = (url, address, pass = "x", on_job = () => { }, on_close = (
     } catch (err) { reject(err); };
 });
 
-const connect = (url, address, pass = "x", on_job = () => { }, on_close = () => { }, on_connect = () => { }) => new Promise(async (resolve, reject) => {
+module.exports.connect = (url, address, pass = "x", on_job = () => { }, on_close = () => { }, on_connect = () => { }) => new Promise(async (resolve, reject) => {
     try {
         const pool = await multiConnect(url, address, pass, (i, job) => on_job(job), () => { on_close(); return true; }, () => on_connect());
 
@@ -159,16 +159,4 @@ const connect = (url, address, pass = "x", on_job = () => { }, on_close = () => 
             reconnect: () => pool.reconnect(0),
         });
     } catch (err) { reject(err); };
-});
-
-module.exports.connect = require("deasync")(async (url, address, pass = "x", on_job = () => { }, on_close = () => { }, on_connect = () => { }, resolve) => {
-    try {
-        resolve(null, await connect(url, address, pass, on_job, on_close, on_connect));
-    } catch (err) { resolve(err, null); };
-});
-
-module.exports.multiConnect = require("deasync")(async (url, address, pass = "x", on_job = () => { }, on_close = () => { }, on_connect = () => { }, resolve) => {
-    try {
-        resolve(null, await multiConnect(url, address, pass, on_job, on_close, on_connect));
-    } catch (err) { resolve(err, null); };
 });

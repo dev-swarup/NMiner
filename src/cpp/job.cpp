@@ -197,6 +197,7 @@ void randomx::job::start(const std::string &mode, size_t threads)
         
         std::memcpy(machine->blob, m_blob, kMaxBlobSize);
         
+        machine->nonce = i;
         machine->m_thread = std::thread([this, i, threads, machine, tsfn]() mutable
             {
                 while (!m_machine->closed)
