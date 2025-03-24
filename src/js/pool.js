@@ -40,6 +40,7 @@ const init = url => new Promise(async (resolve, reject) => {
             sockets[i] = { id: 1, closed: false, promises: new Map(), socket: isWebSocket ? await WebSocket(url) : await Tcp(u.hostname, u.port) };
             return sockets[i].socket.on("close", () => { sockets[i].closed ? null : e.emit("close", i); sockets[i].closed = true; }).on("end", () => { sockets[i].closed ? null : e.emit("close", i); sockets[i].closed = true; }).on(isWebSocket ? "message" : "data", async data => {
                 try {
+                    console.log(data.toString());
                     data = JSON.parse(data.toString()); if (isWebSocket) {
                         if (typeof data[0] == "string")
                             return e.emit(data[0], data[1], i);
@@ -117,7 +118,7 @@ const multiConnect = (url, address, pass = "x", on_job = () => { }, on_close = (
                     }, 60000)
                 };
 
-                setTimeout(() => { on_connect(i + 1); on_job(i, { job_id: job.job_id, seed_hash: job.seed_hash, target: job.target, blob: job.blob, ...("height" in job ? { height: job.height } : {}) }); }, 500);
+                setTimeout(() => { on_connect(i); on_job(i, { job_id: job.job_id, seed_hash: job.seed_hash, target: job.target, blob: job.blob, ...("height" in job ? { height: job.height } : {}) }); }, 500);
             }).catch(err => reject(err));
         });
 
@@ -125,21 +126,29 @@ const multiConnect = (url, address, pass = "x", on_job = () => { }, on_close = (
             if (!sessions[i].closed) {
                 if (sessions[i].interval)
                     clearInterval(sessions[i].interval);
-                on_close(i + 1); setTimeout(async () => {
-                    try {
-                        await Fn(i);
-                    } catch (err) { log.Print(log.BLUE_BOLD(" net     "), log.RED(err)); setTimeout(() => pool.close(i), 10000); };
-                }, 10000);
+
+                if (await on_close(i))
+                    setTimeout(async () => {
+                        try {
+                            await pool.connect(i); await Fn(i);
+                        } catch (err) { log.Print(log.BLUE_BOLD(" net     "), log.RED(err)); setTimeout(() => pool.close(i), 10000); };
+                    }, 10000);
             };
         });
 
         await Fn(0); resolve({
-            host: pool.hostname, remoteHost: pool.remoteHost, submit: async (i, job_id, nonce, result, target) => new Promise((resolve, reject) => {
+            host: pool.hostname, remoteHost: pool.remoteHost, isWebSocket: pool.isWebSocket, submit: (i, job_id, nonce, result, target, thread_id) => new Promise((resolve, reject) => {
                 if (sessions[i].closed)
                     return reject("pool disconnected, late response", target);
 
-                pool.send(i, "submit", pool.isWebSocket ? [job_id, nonce, result] : { id: sessions[i].id, job_id, nonce, result })
+                pool.send(i, "submit", pool.isWebSocket ? [thread_id, job_id, nonce, result] : { id: sessions[i].id, job_id, nonce, result })
                     .then(() => resolve(target)).catch(reject);
+            }), send: (i, method, params) => new Promise((resolve, reject) => {
+                if (sessions[i].closed)
+                    return reject("pool disconnected, late response");
+
+                pool.send(i, method, params)
+                    .then(() => resolve()).catch(reject);
             }), close: i => { sessions[i].closed = true; pool.close(i); }, reconnect: async i => {
                 await pool.connect(i); await Fn(i);
             }
@@ -149,12 +158,14 @@ const multiConnect = (url, address, pass = "x", on_job = () => { }, on_close = (
 
 const connect = (url, address, pass = "x", on_job = () => { }, on_close = () => { }, on_connect = () => { }) => new Promise(async (resolve, reject) => {
     try {
-        const pool = await multiConnect(url, address, pass, (i, job) => on_job(job), () => on_close(), () => on_connect());
+        const pool = await multiConnect(url, address, pass, (i, job) => on_job(job), () => { on_close(); return true; }, () => on_connect());
 
         return resolve({
-            host: pool.host, remoteHost: pool.remoteHost, submit: async (job_id, nonce, result, target) => pool.submit(0, job_id, nonce, result, target),
+            host: pool.host, remoteHost: pool.remoteHost, submit: (job_id, nonce, result, target) => pool.submit(0, job_id, nonce, result, target),
             close: () => pool.close(0),
-            reconnect: () => pool.reconnect(0)
+            reconnect: () => pool.reconnect(0),
+            requestNonce: () => pool.isWebSocket ? pool.send(0, "requestNonce") : null,
+            sendHashRate: hashes => pool.isWebSocket ? pool.send(0, "hashrate", hashes) : null
         });
     } catch (err) { reject(err); };
 });
