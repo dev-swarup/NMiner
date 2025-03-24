@@ -133,6 +133,12 @@ inline constexpr const size_t kNonceOffset = 39;
 inline constexpr const size_t kMaxSeedSize = 32;
 inline constexpr const size_t kMaxBlobSize = 408;
 
+struct blob
+{
+    size_t size = 0;
+    uint8_t blob[kMaxBlobSize];
+};
+
 struct t_machine
 {
     uint32_t nonce;
@@ -155,41 +161,52 @@ namespace randomx
     private:
         std::mutex m_mutex;
 
-        size_t m_size = 0;
         uint64_t m_diff = 0;
         uint64_t m_target = 0;
         randomx_cache *m_cache = nullptr;
         randomx_dataset *m_dataset = nullptr;
         std::shared_ptr<randomx_machine> m_machine;
         
-        uint8_t m_mask;
         uint8_t m_seed[kMaxSeedSize];
-        uint8_t m_blob[kMaxBlobSize];
+        std::vector<blob> blobs = {};
 
         bool m_nicehash = false;
-        inline uint32_t *nonce() { return reinterpret_cast<uint32_t *>(m_blob + kNonceOffset); };
-        inline uint32_t *nonce(uint8_t blob[kMaxBlobSize]) { return reinterpret_cast<uint32_t *>(blob + kNonceOffset); };
+        bool m_extra_nonce = false;
+        inline uint32_t *nonce() 
+        { 
+            return reinterpret_cast<uint32_t *>(blobs[0].blob + kNonceOffset); 
+        };
+        inline uint32_t *nonce(uint8_t blob[kMaxBlobSize]) 
+        { 
+            return reinterpret_cast<uint32_t *>(blob + kNonceOffset); 
+        };
 
         int m_hashes = 0;
         int m_last_hashes = 0;
         std::chrono::system_clock::time_point m_last_time = std::chrono::system_clock::now();
 
-        void calculate_hash(randomx_vm* vm, uint8_t blob[kMaxBlobSize], size_t size, uint32_t nonce, Napi::ThreadSafeFunction tsfn);
+        void calculate_hash(size_t thread_id, randomx_vm* vm, uint8_t blob[kMaxBlobSize], size_t size, uint32_t nonce, Napi::ThreadSafeFunction tsfn);
     public:
         job();
         ~job();
         std::string job_id;
         std::shared_ptr<Napi::FunctionReference> jsSubmit;
+        std::shared_ptr<Napi::FunctionReference> jsRequestNonce;
 
-        int hashrate();
-        int threads() { return m_machine->machine.size(); };
+        std::string hashrate();
+        int threads() 
+        {
+            return m_machine->machine.size();
+        };
+
+        uint32_t setBlob(Napi::Array blob);
         uint32_t setBlob(const std::string &blob);
         uint64_t setTarget(const std::string &target);
 
         void resetNonce()
         {
             for (size_t i = 0; i < m_machine->machine.size(); i++)
-                m_machine->machine[i]->nonce = i;
+                m_machine->machine[i]->nonce = m_extra_nonce ? 0 : i;
         };
 
         bool alloc(const std::string &mode);

@@ -1,4 +1,5 @@
 #include <cpuid.h>
+#include <algorithm>
 #include <sys/mman.h>
 
 #include "job.h"
@@ -26,36 +27,84 @@ randomx::job::job()
     m_machine = std::make_shared<randomx_machine>();
 };
 
-randomx::job::~job() {
+randomx::job::~job() 
+{
 
 };
 
-uint32_t randomx::job::setBlob(const std::string &blob)
+uint32_t randomx::job::setBlob(Napi::Array m_blob)
 {
-    if (sodium_hex2bin(m_blob, sizeof(m_blob), blob.c_str(), blob.size(), nullptr, nullptr, nullptr) != 0)
+    blobs.clear();
+    for (size_t i = 0; i < m_blob.Length(); i++)
+    {
+        blob b_blob;
+        std::string s_blob = m_blob.Get(i).As<Napi::String>().Utf8Value();
+
+        b_blob.size = s_blob.size() / 2;
+        if (sodium_hex2bin(b_blob.blob, kMaxBlobSize, s_blob.c_str(), s_blob.size(), nullptr, nullptr, nullptr) == 0)
+            blobs.push_back(b_blob);
+    };
+
+    if (blobs.size() > 0)
+    {
+        uint32_t num_transactions = 0;
+        const size_t expected_tx_offset = 75;
+        if ((blobs[0].size > expected_tx_offset) && (blobs[0].size <= expected_tx_offset + 4))
+        {
+            for (size_t i = expected_tx_offset, k = 0; i < blobs[0].size; ++i, k += 7)
+            {
+                const uint8_t b = blobs[0].blob[i];
+                num_transactions |= static_cast<uint32_t>(b & 0x7F) << k;
+                if ((b & 0x80) == 0)
+                    break;
+            };
+        };
+
+        m_extra_nonce = blobs.size() > 1; 
+        if (!m_extra_nonce)
+            m_nicehash = readUnaligned(nonce()) != 0;
+
+        if (m_machine->machine.size() > 0)
+            for (size_t i = 0; i < m_machine->machine.size(); i++)
+                std::memcpy(m_machine->machine[i]->blob, blobs[m_extra_nonce ? i : 0].blob, kMaxBlobSize);
+
+        return num_transactions;
+    };
+
+    return 0;
+};
+
+uint32_t randomx::job::setBlob(const std::string &s_blob)
+{
+    blobs.clear();
+
+    blob b_blob;
+    b_blob.size = s_blob.size() / 2;
+    if (sodium_hex2bin(b_blob.blob, kMaxBlobSize, s_blob.c_str(), s_blob.size(), nullptr, nullptr, nullptr) != 0)
         return 0;
 
-    m_size = blob.size() / 2;
+    blobs.push_back(b_blob);
+
     uint32_t num_transactions = 0;
     const size_t expected_tx_offset = 75;
-    if ((m_size > expected_tx_offset) && (m_size <= expected_tx_offset + 4))
+    if ((blobs[0].size > expected_tx_offset) && (blobs[0].size <= expected_tx_offset + 4))
     {
-        for (size_t i = expected_tx_offset, k = 0; i < m_size; ++i, k += 7)
+        for (size_t i = expected_tx_offset, k = 0; i < blobs[0].size; ++i, k += 7)
         {
-            const uint8_t b = m_blob[i];
+            const uint8_t b = blobs[0].blob[i];
             num_transactions |= static_cast<uint32_t>(b & 0x7F) << k;
             if ((b & 0x80) == 0)
                 break;
         };
     };
 
+    m_extra_nonce = false;
     m_nicehash = readUnaligned(nonce()) != 0;
-    if (m_nicehash)
-        std::memcpy(&m_mask, reinterpret_cast<uint8_t *>(m_blob + kNonceOffset + 3), 1);
 
-    for (size_t i = 0; i < m_machine->machine.size(); i++)
-        std::memcpy(m_machine->machine[i]->blob, m_blob, m_size);
-
+    if (m_machine->machine.size() > 0)
+        for (std::shared_ptr<t_machine> machine : m_machine->machine)
+            std::memcpy(machine->blob, b_blob.blob, kMaxBlobSize);
+        
     return num_transactions;
 };
 
@@ -164,23 +213,27 @@ void randomx::job::start()
     m_machine->paused = false;
 };
 
-int randomx::job::hashrate()
+std::string randomx::job::hashrate()
 {
     int hashes = m_hashes - m_last_hashes;
     int duration = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last_time).count();
 
     m_last_hashes += hashes;
     m_last_time = std::chrono::system_clock::now();
-    return hashes / duration;
+    return std::to_string(hashes) + ":" + std::to_string(hashes / duration);
 };
 
 void randomx::job::start(const std::string &mode, size_t threads)
 {
-    if (m_machine->machine.size() >= 1)
+    if (blobs.size() < 1)
         return;
     
-    Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(jsSubmit->Env(), Napi::Function::New(jsSubmit->Env(), [](const Napi::CallbackInfo&) {}), "jsSubmit", 0, 1);
-    for (size_t i = 0; i < threads; i++)
+    if (m_machine->machine.size() >= 1)
+        return;
+
+    size_t uThreads = m_extra_nonce ? std::min(threads, blobs.size()) : threads;
+    Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(jsSubmit->Env(), Napi::Function::New(jsSubmit->Env(), [](const Napi::CallbackInfo &) {}), "jsSubmit", 0, 1);
+    for (size_t i = 0; i < uThreads; i++)
     {
         std::shared_ptr<t_machine> machine = std::make_shared<t_machine>();
         randomx_flags flags = RANDOMX_FLAG_JIT;
@@ -192,11 +245,11 @@ void randomx::job::start(const std::string &mode, size_t threads)
 
         machine->vm = randomx_create_vm(flags, m_cache, m_dataset);
         if (!machine->vm)
-            continue;
-
-        std::memcpy(machine->blob, m_blob, m_size);
-            
-        machine->nonce = i;
+            continue;    
+        
+        std::memcpy(machine->blob, blobs[m_extra_nonce ? i : 0].blob, kMaxBlobSize);
+        
+        machine->nonce = m_extra_nonce ? 0 : i;
         machine->m_thread = std::thread([this, i, threads, machine, tsfn]() mutable
             {
                 while (!m_machine->closed)
@@ -207,11 +260,25 @@ void randomx::job::start(const std::string &mode, size_t threads)
                         continue;
                     };
 
-                    calculate_hash(machine->vm, machine->blob, m_size, m_nicehash ? machine->nonce : machine->nonce & 0xFFFFFF, tsfn);
-                    if (m_nicehash)
-                        machine->nonce = (machine->nonce + threads) & 0xFFFFFF;
+                    calculate_hash(i, machine->vm, machine->blob, blobs[m_extra_nonce ? i : 0].size, m_extra_nonce ? machine->nonce & 0xFFFF : (m_nicehash ? machine->nonce & 0xFFFFFF : machine->nonce), tsfn);
+                    if (m_extra_nonce)
+                    {
+                        machine->nonce = (machine->nonce + 1) & 0xFFFF;
+                        if (machine->nonce > 0xFFFE)
+                        {
+                            tsfn.BlockingCall([this](Napi::Env env, Napi::Function)
+                            {
+                                jsRequestNonce->Call({});
+                            });
+
+                            m_machine->paused = true;
+                        };
+                    }
                     else
-                        machine->nonce += threads;
+                        if (m_nicehash)
+                            machine->nonce = (machine->nonce + threads) & 0xFFFFFF;
+                        else
+                            machine->nonce += threads;
 
                     {
                         std::lock_guard<std::mutex> lock(m_mutex);
@@ -226,29 +293,28 @@ void randomx::job::start(const std::string &mode, size_t threads)
     m_last_hashes = 0;
 };
 
-void randomx::job::calculate_hash(randomx_vm* vm, uint8_t blob[kMaxBlobSize], size_t size, uint32_t n, Napi::ThreadSafeFunction tsfn)
+void randomx::job::calculate_hash(size_t thread_id, randomx_vm *vm, uint8_t blob[kMaxBlobSize], size_t size, uint32_t n, Napi::ThreadSafeFunction tsfn)
 {
-    uint32_t m_nonce = n;
-    if (m_nicehash)
-        m_nonce = (n & 0xFFFFFF) | (m_mask << 24);
-
     uint8_t result[kMaxSeedSize];
-    std::memcpy(nonce(blob), &m_nonce, sizeof(m_nonce));
-    
+    std::memcpy(nonce(blob), &n, m_extra_nonce ? 2 : (m_nicehash ? 3 : 4));
+
     randomx_calculate_hash(vm, blob, size, result);
-    if (*reinterpret_cast<uint64_t*>(result + 24) < m_target)
+    if (*reinterpret_cast<uint64_t *>(result + 24) < m_target)
     {
+        uint32_t m_nonce;
+        std::memcpy(&m_nonce, nonce(blob), sizeof(m_nonce));
+
         char nonce[9];
-        if(sodium_bin2hex(nonce, sizeof(nonce), reinterpret_cast<unsigned char*>(&m_nonce), sizeof(m_nonce)) != 0)
+        if (sodium_bin2hex(nonce, sizeof(nonce), reinterpret_cast<unsigned char *>(&m_nonce), sizeof(m_nonce)) != 0)
             return;
 
         char result_hex[(kMaxSeedSize * 2) + 1];
         if(sodium_bin2hex(result_hex, sizeof(result_hex), reinterpret_cast<unsigned char*>(&result), sizeof(result)) != 0)
             return;
 
-        tsfn.BlockingCall([this, nonce, result_hex](Napi::Env env, Napi::Function)
+        tsfn.BlockingCall([this, nonce, result_hex, thread_id](Napi::Env env, Napi::Function)
             {
-                jsSubmit->Call({ ToString(env, job_id), ToString(env, nonce), ToString(env, result_hex), ToNumber(env, m_diff) });
+                jsSubmit->Call({ ToString(env, job_id), ToString(env, nonce), ToString(env, result_hex), ToNumber(env, m_diff), ToNumber(env, thread_id) });
             });
     };
 };
