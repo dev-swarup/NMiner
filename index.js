@@ -139,104 +139,49 @@ module.exports.NMiner = class {
 };
 
 module.exports.NMinerProxy = class {
-    constructor(p, options) {
-        let pool = null, address = null, pass = "x", soloMine = null;
-        if (typeof p != "object")
+    constructor(...args) {
+        let pool = null, address = null, pass = "x", options = { port: 8080 };
+        if (args.length == 1 && typeof args[0] == "string")
+            pool = args[0];
+
+        if (args.length == 2 && typeof args[0] == "string" && typeof args[1] == "string") {
+            pool = args[0];
+            address = args[1];
+        };
+
+        if (args.length == 2 && typeof args[0] == "string" && typeof args[1] == "object") {
+            pool = args[0];
+            options = { ...options, ...args[1] };
+        };
+
+        if (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string") {
+            pool = args[0];
+            pass = args[2];
+            address = args[1];
+        };
+
+        if (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "object") {
+            pool = args[0];
+            address = args[1];
+            options = { ...options, ...args[2] };
+        };
+
+        if (args.length == 4 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string" && typeof args[3] == "object") {
+            pool = args[0];
+            pass = args[2];
+            address = args[1];
+            options = { ...options, ...args[3] };
+        };
+
+        if (pool == null)
             throw new Error("Invalid arguments");
 
-        if (("url" in p && typeof p.url == "string") && ("address" in p && typeof p.address == "string")) {
-            pool = p.url;
-            address = p.address;
-        };
-
-        if ("pass" in p && typeof p.pass == "string")
-            pass = p.pass;
-
-        if ("soloMine" in p && typeof p.soloMine == "object") {
-            soloMine = { pool: null, address: null, pass: "x", share: 20 };
-
-            if (("url" in p.soloMine && typeof p.soloMine.url == "string") && ("address" in p.soloMine && typeof p.soloMine.address == "string")) {
-                soloMine.pool = p.soloMine.url;
-                soloMine.address = p.soloMine.address;
-            };
-
-            if ("pass" in p.soloMine && typeof p.soloMine.pass == "string")
-                soloMine.pass = p.soloMine.pass;
-
-            if ("share" in p.soloMine && typeof p.soloMine.share == "string")
-                soloMine.share = p.soloMine.share;
-
-            if (soloMine.pool == null || soloMine.address == null)
-                throw new Error("Invalid soloMine arguments");
-        };
-
-        if (pool == null || address == null)
-            throw new Error("Invalid arguments");
-
-        options = { port: 8080, ...(typeof options == "object" ? options : {}) };
-        let WebSocket, count = 0, accepted = 0, rejected = 0, submitFn, nminer = miner.init("LIGHT", 1, (...args) => submitFn(...args));
-
-        let seed_hash = null, height = null, solo_jobs = [], soloPool = null; if (soloMine != null) {
-            soloPool = multiConnect(soloMine.pool, soloMine.address, soloMine.pass, (i, job) => {
-                seed_hash = job.seed_hash;
-                const { diff, txnCount } = nminer.job(job.job_id, job.target, job.blob, true);
-                Print(BLUE_BOLD(" net     "), `${MAGENTA("new job")} from ${soloPool.host} diff ${WHITE_BOLD(diff)} algo ${WHITE_BOLD("rx/0")}${"height" in job ? ` height ${WHITE_BOLD(job.height)}` : ""}${txnCount > 0 ? ` (${txnCount} tx)` : ""}`);
-
-                miner.getPoolBlob(job.blob)
-                //solo_jobs[i] = new miner.splitter(job.job_id, job.target, job.blob, job.seed_hash, job.height); if (WebSocket) {
-
-                // };
-            }, i => {
-                Print(BLUE_BOLD(" net     "), RED("pool disconnected, switching ..."));
-
-            }, i => {
-                Print(BLUE_BOLD(" net     "), `connected to ${CYAN(`${soloPool.host}`)}${soloPool.remoteHost != null ? ` ${GRAY(soloPool.remoteHost)}` : ""}`);
-                if (soloPool.isWebSocket) {
-                    Print(BLUE_BOLD(" net     "), RED("Multi-Pooling is not supported by this protocol."));
-                    soloPool.close(0);
-                    process.exit(0);
-                };
-            });
-        };
-
-        let main_jobs = new Map(), main_jobs_handle = {}, mainPool = multiConnect(pool, address, pass, async (i, job) => {
-            if (soloPool != null && seed_hash != job.seed_hash) {
-                setTimeout(async () => {
-                    mainPool.close(i);
-                    await mainPool.reconnect(i);
-                }, 10000);
-
-                return Print(BLUE_BOLD(" net     "), `${RED(`seed not matched, closing the pool ${mainPool.host} ...`)}`);
-            };
-
-            const { diff, txnCount } = nminer.job(job.job_id, job.target, job.blob, true);
-            Print(BLUE_BOLD(" net     "), `${MAGENTA("new job")} from ${mainPool.host} diff ${WHITE_BOLD(diff)} algo ${WHITE_BOLD("rx/0")}${"height" in job ? ` height ${WHITE_BOLD(job.height)}` : ""}${txnCount > 0 ? ` (${txnCount} tx)` : ""}`);
-
-            miner.getPoolBlob(job.blob).forEach((blob, index) => main_jobs.set(`${i}:${index}`, blob));
-            main_jobs_handle[i] = { job_id: job.job_id, target: job.target, seed_hash: job.seed_hash, ...(height in job ? { height: job.height } : {}) };
-        }, i => {
-            main_jobs[i] = null;
-            Print(BLUE_BOLD(" net     "), RED("pool disconnected, switching ..."));
-
-        }, i => {
-            Print(BLUE_BOLD(" net     "), `connected to ${CYAN(`${mainPool.host}`)}${mainPool.remoteHost != null ? ` ${GRAY(mainPool.remoteHost)}` : ""}`);
-            if (mainPool.isWebSocket) {
-                Print(BLUE_BOLD(" net     "), RED("Multi-Pooling is not supported by this protocol."));
-                mainPool.close(0);
-                process.exit(0);
-            };
-        });
-
-        WebSocket = (new WebSocketServer({ host: "0.0.0.0", port: options.port })).on("connection", async WebSocket => {
+        const WebSocket = (new WebSocketServer({ host: "0.0.0.0", port: options.port })).on("connection", async WebSocket => {
             WebSocket.on("close", () => {
 
             }).on("message", async data => {
                 try {
                     const [id, method, params] = JSON.parse(data.toString()); switch (method) {
-                        case "login":
-                            const [[address, uName, uThreads], pass] = params;
-                            console.log(address, uName, uThreads, pass);
-
                         default:
                             console.log(id, method, params);
                     };
@@ -246,26 +191,14 @@ module.exports.NMinerProxy = class {
             Print(BLUE_BOLD(" net     "), `listening on ${options.port}`);
         });
 
-        submitFn = async (...args) => {
-            try {
-                let time = (new Date()).getTime();
-
-            } catch (err) { rejected++; Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}/${RED(rejected)}) ${err}`); };
-        };
-
-        process.on("SIGINT", () => { nminer.cleanup(); process.exit(); });
-        process.on("SIGTERM", () => { nminer.cleanup(); process.exit(); });
-
         process.on("uncaughtException", err => {
             Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err.message}`);
-            nminer.cleanup();
-            process.exit(0);
+            WebSocket.close();
         });
 
         process.on("unhandledRejection", err => {
             Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err.message}`);
-            nminer.cleanup();
-            process.exit(0);
+            WebSocket.close();
         });
     };
 };
