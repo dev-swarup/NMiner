@@ -40,7 +40,6 @@ const init = url => new Promise(async (resolve, reject) => {
             sockets[i] = { id: 1, closed: false, promises: new Map(), socket: isWebSocket ? await WebSocket(url) : await Tcp(u.hostname, u.port) };
             return sockets[i].socket.on("close", () => { sockets[i].closed ? null : e.emit("close", i); sockets[i].closed = true; }).on("end", () => { sockets[i].closed ? null : e.emit("close", i); sockets[i].closed = true; }).on(isWebSocket ? "message" : "data", async data => {
                 try {
-                    console.log(data.toString());
                     data = JSON.parse(data.toString()); if (isWebSocket) {
                         if (typeof data[0] == "string")
                             return e.emit(data[0], data[1], i);
@@ -137,18 +136,12 @@ const multiConnect = (url, address, pass = "x", on_job = () => { }, on_close = (
         });
 
         await Fn(0); resolve({
-            host: pool.hostname, remoteHost: pool.remoteHost, isWebSocket: pool.isWebSocket, submit: (i, job_id, nonce, result, target, thread_id) => new Promise((resolve, reject) => {
+            host: pool.hostname, remoteHost: pool.remoteHost, isWebSocket: pool.isWebSocket, submit: (i, job_id, nonce, result, target) => new Promise((resolve, reject) => {
                 if (sessions[i].closed)
                     return reject("pool disconnected, late response", target);
 
-                pool.send(i, "submit", pool.isWebSocket ? [thread_id, job_id, nonce, result] : { id: sessions[i].id, job_id, nonce, result })
+                pool.send(i, "submit", pool.isWebSocket ? [job_id, nonce, result] : { id: sessions[i].id, job_id, nonce, result })
                     .then(() => resolve(target)).catch(reject);
-            }), send: (i, method, params) => new Promise((resolve, reject) => {
-                if (sessions[i].closed)
-                    return reject("pool disconnected, late response");
-
-                pool.send(i, method, params)
-                    .then(() => resolve()).catch(reject);
             }), close: i => { sessions[i].closed = true; pool.close(i); }, reconnect: async i => {
                 await pool.connect(i); await Fn(i);
             }
@@ -164,8 +157,6 @@ const connect = (url, address, pass = "x", on_job = () => { }, on_close = () => 
             host: pool.host, remoteHost: pool.remoteHost, submit: (job_id, nonce, result, target) => pool.submit(0, job_id, nonce, result, target),
             close: () => pool.close(0),
             reconnect: () => pool.reconnect(0),
-            requestNonce: () => pool.isWebSocket ? pool.send(0, "requestNonce") : null,
-            sendHashRate: hashes => pool.isWebSocket ? pool.send(0, "hashrate", hashes) : null
         });
     } catch (err) { reject(err); };
 });

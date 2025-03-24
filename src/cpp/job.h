@@ -133,12 +133,6 @@ inline constexpr const size_t kNonceOffset = 39;
 inline constexpr const size_t kMaxSeedSize = 32;
 inline constexpr const size_t kMaxBlobSize = 408;
 
-struct blob
-{
-    size_t size = 0;
-    uint8_t blob[kMaxBlobSize];
-};
-
 struct t_machine
 {
     uint32_t nonce;
@@ -168,13 +162,13 @@ namespace randomx
         std::shared_ptr<randomx_machine> m_machine;
         
         uint8_t m_seed[kMaxSeedSize];
-        std::vector<blob> blobs = {};
+        uint8_t m_blob[kMaxBlobSize];
 
+        size_t m_size = 0;
         bool m_nicehash = false;
-        bool m_extra_nonce = false;
         inline uint32_t *nonce() 
         { 
-            return reinterpret_cast<uint32_t *>(blobs[0].blob + kNonceOffset); 
+            return reinterpret_cast<uint32_t *>(m_blob + kNonceOffset); 
         };
         inline uint32_t *nonce(uint8_t blob[kMaxBlobSize]) 
         { 
@@ -185,28 +179,26 @@ namespace randomx
         int m_last_hashes = 0;
         std::chrono::system_clock::time_point m_last_time = std::chrono::system_clock::now();
 
-        void calculate_hash(size_t thread_id, randomx_vm* vm, uint8_t blob[kMaxBlobSize], size_t size, uint32_t nonce, Napi::ThreadSafeFunction tsfn);
+        void calculate_hash(randomx_vm* vm, uint8_t blob[kMaxBlobSize], size_t size, uint32_t nonce, Napi::ThreadSafeFunction tsfn);
     public:
         job();
         ~job();
         std::string job_id;
         std::shared_ptr<Napi::FunctionReference> jsSubmit;
-        std::shared_ptr<Napi::FunctionReference> jsRequestNonce;
 
-        std::string hashrate();
+        int hashrate();
         int threads() 
         {
             return m_machine->machine.size();
         };
 
-        uint32_t setBlob(Napi::Array blob);
         uint32_t setBlob(const std::string &blob);
         uint64_t setTarget(const std::string &target);
 
         void resetNonce()
         {
             for (size_t i = 0; i < m_machine->machine.size(); i++)
-                m_machine->machine[i]->nonce = m_extra_nonce ? 0 : i;
+                m_machine->machine[i]->nonce = i;
         };
 
         bool alloc(const std::string &mode);
