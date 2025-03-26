@@ -110,10 +110,10 @@ module.exports.NMiner = class {
                     lastAcceptedCount = accepted;
                     const threads = nminer.threads();
                     const hashrate = nminer.hashrate();
-                    Print(CYAN_BOLD(" cpu     "), `speed ${CYAN_BOLD(" cpu ")} ${PrintHashes(hashrate)} ${BLUE_BOLD(" pool ")} ${PrintHashes((totalHashes - lastTotalHashes) / 60, hashrate)} ${hashrate > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(nminer.uThreads == threads ? CYAN : RED)(threads)}/${nminer.uThreads})`)}`);
+                    Print(CYAN_BOLD(" cpu     "), `speed ${CYAN_BOLD(" cpu ")} ${PrintHashes(hashrate)} ${BLUE_BOLD(" pool ")} ${PrintHashes((totalHashes - lastTotalHashes) / 300, hashrate)} ${hashrate > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(nminer.uThreads == threads ? CYAN : RED)(threads)}/${nminer.uThreads})`)}`);
 
                     lastTotalHashes = totalHashes;
-                }, 60000);
+                }, 5 * 60000);
             } catch (err) { Print(BLUE_BOLD(" net     "), RED(err)); setTimeout(() => connectTo(), 10000); };
         })();
 
