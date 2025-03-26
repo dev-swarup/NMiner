@@ -12,7 +12,10 @@ const log = require("./log.js"), { WebSocket: Socket } = require("ws"),
         });
     }),
     WebSocket = url => new Promise(async (resolve, reject) => {
-        let u = new URL(url), resolved = false; const t = (new Socket(url)).on("error", () => {
+        let u = new URL(url), resolved = false; const t = (new Socket(url)).on("open", () => {
+            resolved = true;
+            setTimeout(() => resolve(t), 100);
+        }).on("error", () => {
             if (!resolved) {
                 resolved = true;
                 reject(`Failed to connect ${u.host}`);
@@ -23,9 +26,6 @@ const log = require("./log.js"), { WebSocket: Socket } = require("ws"),
                 reject(`Failed to connect ${u.host}`);
             };
         });
-
-        resolved = true;
-        setTimeout(() => resolve(t), 100);
     });
 
 const init = url => new Promise(async (resolve, reject) => {

@@ -18,8 +18,8 @@ module.exports.init = (mode, threads, submitFn) => {
     threads = Math.min(threads || sysInfo.threads, sysInfo.threads);
 
     try {
-        return { ...require("../../build/NMiner.node").init(mode, threads, submitFn), mode, uThreads: threads };
+        return { ...require("../../build/NMiner.node").init(mode, sysInfo.numa, threads, submitFn), mode, uThreads: threads };
     } catch {
-        return { ...require("../../build/Release/NMiner.node").init(mode == "LIGHT" ? "LIGHT" : sysInfo.mode, Math.min(threads, sysInfo.threads), submitFn), mode, uThreads: threads };
+        return { ...require("../../build/Release/NMiner.node").init(mode, sysInfo.numa, threads, submitFn), mode, uThreads: threads };
     };
 };

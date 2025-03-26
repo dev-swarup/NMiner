@@ -73,6 +73,8 @@ jobs:
           choco install python --version 3.8.0
           choco install nodejs-lts
 
+          sudo apt-get install -y libnuma-dev cmake g++ make
+
       - name: Checkout repository
         uses: actions/checkout@v3
         with:

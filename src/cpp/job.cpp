@@ -1,4 +1,8 @@
+#include <numa.h>
 #include <cpuid.h>
+#include <sched.h>
+#include <numaif.h>
+#include <pthread.h>
 #include <algorithm>
 #include <sys/mman.h>
 
@@ -71,12 +75,13 @@ uint64_t randomx::job::setTarget(const std::string &target)
     return m_diff;
 };
 
-bool randomx::job::alloc(const std::string &mode)
+bool randomx::job::alloc(const std::string &mode, int numaCores)
 {
-    if (m_dataset)
+    if (m_dataset.size() > 0)
     {
-        randomx_release_dataset(m_dataset);
-        m_dataset = nullptr;
+        for (size_t i = 0; i < m_dataset.size(); i++)
+            randomx_release_dataset(m_dataset[i]);
+        m_dataset.clear();
     };
 
     if (m_cache)
@@ -98,17 +103,23 @@ bool randomx::job::alloc(const std::string &mode)
 
     if (mode == "FAST")
     {
-        m_dataset = randomx_alloc_dataset(RANDOMX_FLAG_FULL_MEM);
-        if (!m_dataset)
-            return false;
+        for (size_t i = 0; i < numaCores; ++i)
+        {
+            numa_set_preferred(i);
+            randomx_dataset *dataset = randomx_alloc_dataset(RANDOMX_FLAG_FULL_MEM);
+            if (dataset)
+                m_dataset.emplace_back(std::move(dataset));
+        };
+
+        return m_dataset.size() == numaCores;
     };
 
     return true;
 };
 
-bool randomx::job::init(const std::string &mode, size_t threads, const std::string &seed_hash)
+bool randomx::job::init(const std::string &mode, int numaCores, size_t threads, const std::string &seed_hash)
 {
-    if (!m_cache || (!m_dataset && mode == "FAST"))
+    if (!m_cache || (m_dataset.size() == numaCores && mode == "FAST"))
         return false;
 
     if (sodium_hex2bin(m_seed, sizeof(m_seed), seed_hash.c_str(), seed_hash.size(), nullptr, nullptr, nullptr) != 0)
@@ -118,36 +129,41 @@ bool randomx::job::init(const std::string &mode, size_t threads, const std::stri
     if (mode == "FAST")
     {
         const uint64_t dataset_count = randomx_dataset_item_count();
-        if (threads > 1)
+        for (size_t numa = 0; numa < numaCores; ++numa)
         {
-            std::vector<std::thread> m_threads;
-            m_threads.reserve(threads);
-
-            for (uint64_t i = 0; i < threads; ++i)
+            numa_set_preferred(numa);
+            if (threads > 1)
             {
-                const uint32_t start = (dataset_count * i) / threads;
-                const uint32_t end = (dataset_count * (i + 1)) / threads;
+                std::vector<std::thread> m_threads;
+                m_threads.reserve(threads);
 
-                m_threads.emplace_back([this, start, size = end - start]()
-                                        {
-                                            if (size % 5)
-                                            {
-                                                randomx_init_dataset(m_dataset, m_cache, start, size - (size % 5));
-                                                randomx_init_dataset(m_dataset, m_cache, start + size - 5, 5);
-                                            }
-                                            else
-                                                randomx_init_dataset(m_dataset, m_cache, start, size); 
-                                        });
-            };
+                for (uint64_t i = 0; i < threads; ++i)
+                {
+                    const uint32_t start = (dataset_count * i) / threads;
+                    const uint32_t end = (dataset_count * (i + 1)) / threads;
 
-            for (auto &t : m_threads)
-            {
-                if (t.joinable())
-                    t.join();
-            };
-        }
-        else
-            randomx_init_dataset(m_dataset, m_cache, 0, dataset_count);
+                    m_threads.emplace_back([this, numa, start, size = end - start]()
+                        {
+                            if (size % 5)
+                            {
+                                randomx_init_dataset(m_dataset[numa], m_cache, start, size - (size % 5));
+                                randomx_init_dataset(m_dataset[numa], m_cache, start + size - 5, 5);
+                            }
+                            else
+                                randomx_init_dataset(m_dataset[numa], m_cache, start, size);
+                        });
+                };
+
+                for (auto &t : m_threads)
+                {
+                    if (t.joinable())
+                        t.join();
+                };
+            }
+            else
+                randomx_init_dataset(m_dataset[numa], m_cache, 0, dataset_count);
+        };
+
         randomx_release_cache(m_cache);
         m_cache = nullptr;
     };
@@ -175,52 +191,63 @@ int randomx::job::hashrate()
     return hashes / duration;
 };
 
-void randomx::job::start(const std::string &mode, size_t threads)
+void randomx::job::start(const std::string &mode, int cpuCores, size_t threads)
 {
     if (m_machine->machine.size() >= 1)
         return;
 
     Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(jsSubmit->Env(), Napi::Function::New(jsSubmit->Env(), [](const Napi::CallbackInfo &) {}), "jsSubmit", 0, 1);
-    for (size_t i = 0; i < threads; i++)
+    
+    int threadPerNuma = threads / cpuCores;
+    for (size_t numa = 0; numa < cpuCores; numa++)
     {
-        std::shared_ptr<t_machine> machine = std::make_shared<t_machine>();
-        randomx_flags flags = RANDOMX_FLAG_JIT;
-        if (AESSupport())
-            flags |= RANDOMX_FLAG_HARD_AES;
+        for (size_t i = 0; i < threadPerNuma; i++)
+        {
+            std::shared_ptr<t_machine> machine = std::make_shared<t_machine>();
+            randomx_flags flags = RANDOMX_FLAG_JIT;
+            if (AESSupport())
+                flags |= RANDOMX_FLAG_HARD_AES;
+    
+            if (mode == "FAST")
+                flags |= RANDOMX_FLAG_FULL_MEM;
 
-        if (mode == "FAST")
-            flags |= RANDOMX_FLAG_FULL_MEM;
+            machine->vm = randomx_create_vm(flags, m_cache, m_dataset[numa]);
+            if (!machine->vm)
+                continue; 
 
-        machine->vm = randomx_create_vm(flags, m_cache, m_dataset);
-        if (!machine->vm)
-            continue;    
-        
-        std::memcpy(machine->blob, m_blob, kMaxBlobSize);
-        
-        machine->nonce = i;
-        machine->m_thread = std::thread([this, i, threads, machine, tsfn]() mutable
-            {
-                while (!m_machine->closed)
+            std::memcpy(machine->blob, m_blob, kMaxBlobSize);
+
+            machine->nonce = i;
+            machine->m_thread = std::thread([this, i, numa, threadPerNuma, machine, tsfn]() mutable
                 {
-                    if (m_machine->paused)
-                    {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                        continue;
-                    };
+                    cpu_set_t cpuset;
+                    CPU_ZERO(&cpuset);
+                    CPU_SET(i % std::thread::hardware_concurrency(), &cpuset);
+                    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 
-                    calculate_hash(machine->vm, machine->blob, m_size, m_nicehash ? machine->nonce & 0xFFFFFF : machine->nonce, tsfn);
-                    if (m_nicehash)
-                        machine->nonce = (machine->nonce + threads) & 0xFFFFFF;
-                    else
-                        machine->nonce += threads;
-
+                    numa_run_on_node(numa);
+                    while (!m_machine->closed)
                     {
-                        std::lock_guard<std::mutex> lock(m_mutex);
-                        m_hashes++;
+                        if (m_machine->paused)
+                        {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                            continue;
+                        };
+
+                        calculate_hash(machine->vm, machine->blob, m_size, m_nicehash ? machine->nonce & 0xFFFFFF : machine->nonce, tsfn);
+                        if (m_nicehash)
+                            machine->nonce = (machine->nonce + threadPerNuma) & 0xFFFFFF;
+                        else
+                            machine->nonce += threadPerNuma;
+
+                        {
+                            std::lock_guard<std::mutex> lock(m_mutex);
+                            m_hashes++;
+                        };
                     };
-                };
-            });
-        m_machine->machine.emplace_back(machine);
+                });
+            m_machine->machine.emplace_back(machine);
+        };
     };
 
     m_hashes = 0;

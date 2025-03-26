@@ -216,7 +216,7 @@ module.exports.NMinerProxy = class {
                         case "submit":
                             if (socket) {
                                 let time = (new Date()).getTime(); try {
-                                    const target = await socket.submit(...params, null);
+                                    await socket.submit(...params, null);
 
                                     accepted++;
                                     WebSocket.send(JSON.stringify([id, null, "OK"]));
