@@ -119,7 +119,7 @@ bool randomx::job::alloc(const std::string &mode, int numaCores)
 
 bool randomx::job::init(const std::string &mode, int numaCores, size_t threads, const std::string &seed_hash)
 {
-    if (!m_cache || (m_dataset.size() == numaCores && mode == "FAST"))
+    if (!m_cache || (m_dataset.size() != numaCores && mode == "FAST"))
         return false;
 
     if (sodium_hex2bin(m_seed, sizeof(m_seed), seed_hash.c_str(), seed_hash.size(), nullptr, nullptr, nullptr) != 0)
