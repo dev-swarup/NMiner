@@ -26,6 +26,11 @@ bool LargePagesSupport()
     return true;
 };
 
+bool isNUMASupported() 
+{
+    return numa_available() != -1;
+};
+
 randomx::job::job() 
 {
     m_machine = std::make_shared<randomx_machine>();
@@ -103,9 +108,18 @@ bool randomx::job::alloc(const std::string &mode, int numaCores)
 
     if (mode == "FAST")
     {
-        for (size_t i = 0; i < numaCores; ++i)
+        if (isNUMASupported())
         {
-            numa_set_preferred(i);
+            for (size_t i = 0; i < numaCores; ++i)
+            {
+                numa_set_preferred(i);
+                randomx_dataset *dataset = randomx_alloc_dataset(RANDOMX_FLAG_FULL_MEM);
+                if (dataset)
+                    m_dataset.emplace_back(std::move(dataset));
+            };
+        }
+        else
+        {
             randomx_dataset *dataset = randomx_alloc_dataset(RANDOMX_FLAG_FULL_MEM);
             if (dataset)
                 m_dataset.emplace_back(std::move(dataset));
@@ -119,7 +133,7 @@ bool randomx::job::alloc(const std::string &mode, int numaCores)
 
 bool randomx::job::init(const std::string &mode, int numaCores, size_t threads, const std::string &seed_hash)
 {
-    if (!m_cache || (m_dataset.size() != numaCores && mode == "FAST"))
+    if (!m_cache || (m_dataset.size() < 1 && mode == "FAST"))
         return false;
 
     if (sodium_hex2bin(m_seed, sizeof(m_seed), seed_hash.c_str(), seed_hash.size(), nullptr, nullptr, nullptr) != 0)
@@ -129,9 +143,45 @@ bool randomx::job::init(const std::string &mode, int numaCores, size_t threads, 
     if (mode == "FAST")
     {
         const uint64_t dataset_count = randomx_dataset_item_count();
-        for (size_t numa = 0; numa < numaCores; ++numa)
+        if (isNUMASupported())
         {
-            numa_set_preferred(numa);
+            for (size_t numa = 0; numa < numaCores; ++numa)
+            {
+                numa_set_preferred(numa);
+                if (threads > 1)
+                {
+                    std::vector<std::thread> m_threads;
+                    m_threads.reserve(threads);
+
+                    for (uint64_t i = 0; i < threads; ++i)
+                    {
+                        const uint32_t start = (dataset_count * i) / threads;
+                        const uint32_t end = (dataset_count * (i + 1)) / threads;
+
+                        m_threads.emplace_back([this, numa, start, size = end - start]()
+                            {
+                                if (size % 5)
+                                {
+                                    randomx_init_dataset(m_dataset[numa], m_cache, start, size - (size % 5));
+                                    randomx_init_dataset(m_dataset[numa], m_cache, start + size - 5, 5);
+                                }
+                                else
+                                    randomx_init_dataset(m_dataset[numa], m_cache, start, size);
+                            });
+                    };
+
+                    for (auto &t : m_threads)
+                    {
+                        if (t.joinable())
+                            t.join();
+                    };
+                }
+                else
+                    randomx_init_dataset(m_dataset[numa], m_cache, 0, dataset_count);
+            };
+        }
+        else
+        {
             if (threads > 1)
             {
                 std::vector<std::thread> m_threads;
@@ -142,7 +192,7 @@ bool randomx::job::init(const std::string &mode, int numaCores, size_t threads, 
                     const uint32_t start = (dataset_count * i) / threads;
                     const uint32_t end = (dataset_count * (i + 1)) / threads;
 
-                    m_threads.emplace_back([this, numa, start, size = end - start]()
+                    m_threads.emplace_back([this, numa = 0, start, size = end - start]()
                         {
                             if (size % 5)
                             {
@@ -161,7 +211,7 @@ bool randomx::job::init(const std::string &mode, int numaCores, size_t threads, 
                 };
             }
             else
-                randomx_init_dataset(m_dataset[numa], m_cache, 0, dataset_count);
+                randomx_init_dataset(m_dataset[0], m_cache, 0, dataset_count);
         };
 
         randomx_release_cache(m_cache);
@@ -220,12 +270,9 @@ void randomx::job::start(const std::string &mode, int cpuCores, size_t threads)
             machine->nonce = i;
             machine->m_thread = std::thread([this, i, numa, threadPerNuma, machine, tsfn]() mutable
                 {
-                    cpu_set_t cpuset;
-                    CPU_ZERO(&cpuset);
-                    CPU_SET(i % std::thread::hardware_concurrency(), &cpuset);
-                    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+                    if (isNUMASupported())
+                        numa_run_on_node(numa);
 
-                    numa_run_on_node(numa);
                     while (!m_machine->closed)
                     {
                         if (m_machine->paused)
