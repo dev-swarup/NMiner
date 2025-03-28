@@ -247,8 +247,9 @@ void randomx::job::start(const std::string &mode, int cpuCores, size_t threads)
         return;
 
     Napi::ThreadSafeFunction tsfn = Napi::ThreadSafeFunction::New(jsSubmit->Env(), Napi::Function::New(jsSubmit->Env(), [](const Napi::CallbackInfo &) {}), "jsSubmit", 0, 1);
-    
     int threadPerNuma = threads / cpuCores;
+    
+    int tn = 0;
     for (size_t numa = 0; numa < cpuCores; numa++)
     {
         for (size_t i = 0; i < threadPerNuma; i++)
@@ -267,8 +268,8 @@ void randomx::job::start(const std::string &mode, int cpuCores, size_t threads)
 
             std::memcpy(machine->blob, m_blob, kMaxBlobSize);
 
-            machine->nonce = i;
-            machine->m_thread = std::thread([this, i, numa, threadPerNuma, machine, tsfn]() mutable
+            machine->nonce = tn;
+            machine->m_thread = std::thread([this, i = threadPerNuma * cpuCores, numa, threadPerNuma, machine, tsfn]() mutable
                 {
                     if (isNUMASupported())
                         numa_run_on_node(numa);
@@ -283,9 +284,9 @@ void randomx::job::start(const std::string &mode, int cpuCores, size_t threads)
 
                         calculate_hash(machine->vm, machine->blob, m_size, m_nicehash ? machine->nonce & 0xFFFFFF : machine->nonce, tsfn);
                         if (m_nicehash)
-                            machine->nonce = (machine->nonce + threadPerNuma) & 0xFFFFFF;
+                            machine->nonce = (machine->nonce + i) & 0xFFFFFF;
                         else
-                            machine->nonce += threadPerNuma;
+                            machine->nonce += i;
 
                         {
                             std::lock_guard<std::mutex> lock(m_mutex);
@@ -294,6 +295,8 @@ void randomx::job::start(const std::string &mode, int cpuCores, size_t threads)
                     };
                 });
             m_machine->machine.emplace_back(machine);
+
+            tn++;
         };
     };
 
