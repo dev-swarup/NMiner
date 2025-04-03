@@ -14,6 +14,7 @@ jobs:
         config:
           - { os: ubuntu-20.04 }
           - { os: ubuntu-22.04 }
+          - { os: ubuntu-24.04 }
 
     steps:
       - name: Install dependencies
@@ -24,19 +25,12 @@ jobs:
           sudo apt install -y git build-essential cmake python3 libnuma-dev
       
       - name: Install Node.js
-        run: |
-          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
-          export NVM_DIR="$HOME/.nvm"
-          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-          [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-
-          nvm install v20
-          nvm use v20
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
 
       - name: Checkout repository
         uses: actions/checkout@v3
-        with:
-          submodules: recursive
 
       - name: Install NPM dependencies
         run: |
@@ -55,3 +49,28 @@ jobs:
         with:
           name: nminer-${{matrix.config.os}}.tar.gz
           path: nminer.tar.gz
+
+  windows:
+    timeout-minutes: 20
+    runs-on: windows-latest
+
+    steps:
+      - name: Install Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          choco install -y cmake python3
+        
+      - name: Install dependencies
+        run: |
+          choco install -y cmake python3
+
+      - name: Build NMiner
+        run: |
+          mkdir -p build && npm run build
