@@ -47,3 +47,28 @@ jobs:
         with:
           name: nminer-${{matrix.config.os}}.tar.gz
           path: nminer.tar.gz
+
+  windows:
+    timeout-minutes: 20
+    runs-on: windows-latest
+
+    steps:
+      - name: Install Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          choco install -y cmake python3
+        
+      - name: Install dependencies
+        run: |
+          choco install -y cmake python3
+
+      - name: Build NMiner
+        run: |
+          mkdir -p build && npm run build
