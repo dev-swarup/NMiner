@@ -14,29 +14,21 @@ jobs:
         config:
           - { os: ubuntu-20.04 }
           - { os: ubuntu-22.04 }
+          - { os: ubuntu-24.04 }
 
     steps:
       - name: Install dependencies
         run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-
           sudo apt update
           sudo apt install -y git build-essential cmake python3 libnuma-dev
       
       - name: Install Node.js
-        run: |
-          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
-          export NVM_DIR="$HOME/.nvm"
-          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-          [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-
-          nvm install v20
-          nvm use v20
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
 
       - name: Checkout repository
         uses: actions/checkout@v3
-        with:
-          submodules: recursive
 
       - name: Install NPM dependencies
         run: |
