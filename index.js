@@ -177,7 +177,11 @@ module.exports.NMinerProxy = class {
             throw new Error("Invalid arguments");
 
         const WebSocket = (new WebSocketServer({ host: "0.0.0.0", port: options.port })).on("connection", async WebSocket => {
-            let socket = null, logged = false, accepted = 0, rejected = 0; WebSocket.on("close", () => {
+            let socket = null, logged = false, accepted = 0, rejected = 0, timeout = setTimeout(() => {
+                if (socket)
+                    socket.close();
+                Print(BLUE_BOLD(" net     "), RED("miner timeout, closing socket."));
+            }, 5 * 60 * 1000); WebSocket.on("close", () => {
                 if (socket)
                     socket.close();
                 Print(BLUE_BOLD(" net     "), RED("miner disconnected, closing socket."));
@@ -235,6 +239,12 @@ module.exports.NMinerProxy = class {
                             break;
 
                         case "keepalived":
+                            clearTimeout(timeout); timeout = setTimeout(() => {
+                                if (socket)
+                                    socket.close();
+                                Print(BLUE_BOLD(" net     "), RED("miner timeout, closing socket."));
+                            }, 5 * 60 * 1000);
+
                             WebSocket.send(JSON.stringify([id, null, { status: "OK" }]));
                             break;
                     };
