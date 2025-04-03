@@ -110,9 +110,9 @@ bool randomx::job::alloc(const std::string &mode, int numaCores)
     {
         if (isNUMASupported())
         {
-            for (size_t i = 0; i < numaCores; ++i)
+            for (size_t numa = 0; numa < numaCores; ++numa)
             {
-                numa_set_preferred(i);
+                numa_run_on_node(numa);
                 randomx_dataset *dataset = randomx_alloc_dataset(RANDOMX_FLAG_FULL_MEM);
                 if (dataset)
                     m_dataset.emplace_back(std::move(dataset));
