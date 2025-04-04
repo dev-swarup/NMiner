@@ -204,7 +204,7 @@ module.exports.NMinerProxy = class {
                             };
 
                             try {
-                                socket = await connect(result.pool, result.address, result.pass, job => {
+                                socket = await connect(result.pool, result.address, result.pass, null, job => {
                                     if (!logged) {
                                         WebSocket.send(JSON.stringify([id, null, { id: 0, job }]));
                                         logged = true;
