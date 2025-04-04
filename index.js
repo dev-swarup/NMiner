@@ -1,7 +1,7 @@
 const os = require("os");
 const miner = require("./src/js/miner.js");
 const { connect } = require("./src/js/pool.js");
-const ProxyAgent = require('https-proxy-agent');
+const ProxyAgent = require('https-proxy-agent').HttpsProxyAgent;
 
 const { WebSocketServer } = require("ws");
 const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
@@ -13,7 +13,7 @@ module.exports.NMiner = class {
         if (args.length == 1 && typeof args[0] == "string")
             pool = args[0];
 
-        if (args.length == 2 && typeof args[0] == "string" && typeof args[1] == "string") {
+        if (args.length == 2 && typeof args[0] == "string" && (typeof args[1] == "string" || args[1] == null)) {
             pool = args[0];
             address = args[1];
         };
@@ -23,19 +23,19 @@ module.exports.NMiner = class {
             options = { ...options, ...args[1] };
         };
 
-        if (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string") {
+        if (args.length == 3 && typeof args[0] == "string" && (typeof args[1] == "string" || args[1] == null) && (typeof args[2] == "string" || args[2] == null)) {
             pool = args[0];
             pass = args[2];
             address = args[1];
         };
 
-        if (args.length == 3 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "object") {
+        if (args.length == 3 && typeof args[0] == "string" && (typeof args[1] == "string" || args[1] == null) && typeof args[2] == "object") {
             pool = args[0];
             address = args[1];
             options = { ...options, ...args[2] };
         };
 
-        if (args.length == 4 && typeof args[0] == "string" && typeof args[1] == "string" && typeof args[2] == "string" && typeof args[3] == "object") {
+        if (args.length == 4 && typeof args[0] == "string" && (typeof args[1] == "string" || args[1] == null) && (typeof args[2] == "string" || args[2] == null) && (typeof args[3] == "string" || args[3] == null)) {
             pool = args[0];
             pass = args[2];
             address = args[1];
