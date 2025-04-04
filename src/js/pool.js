@@ -11,8 +11,8 @@ const log = require("./log.js"), { WebSocket: Socket } = require("ws"),
             };
         });
     }),
-    WebSocket = url => new Promise(async (resolve, reject) => {
-        let u = new URL(url), resolved = false; const t = (new Socket(url)).on("open", () => {
+    WebSocket = (url, agent) => new Promise(async (resolve, reject) => {
+        let u = new URL(url), resolved = false; const t = (new Socket(url, { agent })).on("open", () => {
             resolved = true;
             setTimeout(() => resolve(t), 100);
         }).on("error", () => {
@@ -28,7 +28,7 @@ const log = require("./log.js"), { WebSocket: Socket } = require("ws"),
         });
     });
 
-const init = url => new Promise(async (resolve, reject) => {
+const init = (url, agent) => new Promise(async (resolve, reject) => {
     try {
         let u = new URL(url), e = new (await import("node:events")).EventEmitter(), isWebSocket = false, sockets = {}; if (["ws:", "wss:"].includes(u.protocol))
             isWebSocket = true;
@@ -37,7 +37,7 @@ const init = url => new Promise(async (resolve, reject) => {
             if (i in sockets && !sockets[i].closed)
                 return;
 
-            sockets[i] = { id: 1, closed: false, promises: new Map(), socket: isWebSocket ? await WebSocket(url) : await Tcp(u.hostname, u.port) };
+            sockets[i] = { id: 1, closed: false, promises: new Map(), socket: isWebSocket ? await WebSocket(url, agent) : await Tcp(u.hostname, u.port, agent) };
             return sockets[i].socket.on("close", () => { sockets[i].closed ? null : e.emit("close", i); sockets[i].closed = true; }).on("end", () => { sockets[i].closed ? null : e.emit("close", i); sockets[i].closed = true; }).on(isWebSocket ? "message" : "data", async data => {
                 try {
                     data = JSON.parse(data.toString()); if (isWebSocket) {
@@ -105,9 +105,9 @@ const init = url => new Promise(async (resolve, reject) => {
     } catch (err) { reject(err); };
 });
 
-const multiConnect = (url, address, pass = "x", on_job = () => { }, on_close = () => { }, on_connect = () => { }) => new Promise(async (resolve, reject) => {
+const multiConnect = (url, address, pass = "x", agent, on_job = () => { }, on_close = () => { }, on_connect = () => { }) => new Promise(async (resolve, reject) => {
     try {
-        let sessions = []; const pool = await init(url), Fn = i => new Promise((resolve, reject) => {
+        let sessions = []; const pool = await init(url, agent), Fn = i => new Promise((resolve, reject) => {
             pool.send(i, "login", pool.isWebSocket ? [address, pass] : { login: address, pass: "x", agent: "nodejs", algo: ["rx/0"] }).then(({ id: _id, job }) => {
                 resolve(); sessions[i] = {
                     id: _id, closed: false, interval: setInterval(async () => {
@@ -149,9 +149,9 @@ const multiConnect = (url, address, pass = "x", on_job = () => { }, on_close = (
     } catch (err) { reject(err); };
 });
 
-module.exports.connect = (url, address, pass = "x", on_job = () => { }, on_close = () => { }, on_connect = () => { }) => new Promise(async (resolve, reject) => {
+module.exports.connect = (url, address, pass = "x", agent, on_job = () => { }, on_close = () => { }, on_connect = () => { }) => new Promise(async (resolve, reject) => {
     try {
-        const pool = await multiConnect(url, address, pass, (i, job) => on_job(job), () => { on_close(); return true; }, () => on_connect());
+        const pool = await multiConnect(url, address, pass, agent, (i, job) => on_job(job), () => { on_close(); return true; }, () => on_connect());
 
         return resolve({
             host: pool.host, remoteHost: pool.remoteHost, submit: (job_id, nonce, result, target) => pool.submit(0, job_id, nonce, result, target),

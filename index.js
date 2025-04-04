@@ -1,6 +1,7 @@
 const os = require("os");
 const miner = require("./src/js/miner.js");
 const { connect } = require("./src/js/pool.js");
+const ProxyAgent = require('https-proxy-agent');
 
 const { WebSocketServer } = require("ws");
 const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
@@ -44,7 +45,9 @@ module.exports.NMiner = class {
         if (pool == null)
             throw new Error("Invalid arguments");
 
-        let p, accepted = 0, rejected = 0, submitFn, nminer = miner.init(options.mode, options.threads, (...args) => submitFn(...args));
+        let p, accepted = 0, rejected = 0, submitFn, agent, nminer = miner.init(options.mode, options.threads, (...args) => submitFn(...args));
+        if ("proxy" in options)
+            agent = new ProxyAgent(options.proxy);
 
         const lPages = nminer.lPages(), hugePages = nminer.hugePages();
         console.log(GREEN(" * "), `${WHITE_BOLD("1GB PAGES")}        ${(lPages == 0 ? GREEN : lPages == -1 ? RED : YELLOW)(lPages == 0 ? "supported" : lPages == -1 ? "disabled" : "restart required")}`);
