@@ -95,7 +95,7 @@ bool randomx::job::alloc(const std::string &mode, int numaCores)
         m_cache = nullptr;
     };
 
-    randomx_flags flags = RANDOMX_FLAG_JIT | RANDOMX_FLAG_SECURE | RANDOMX_FLAG_ARGON2;
+    randomx_flags flags = RANDOMX_FLAG_JIT | RANDOMX_FLAG_ARGON2;
     if (AESSupport())
         flags |= RANDOMX_FLAG_HARD_AES;
 
