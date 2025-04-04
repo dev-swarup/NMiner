@@ -55,7 +55,7 @@ module.exports.NMiner = class {
 
         (async function connectTo() {
             let totalHashes = 0, jobCount = 0, temp_blob, temp_seed_hash; try {
-                p = await connect(pool, pool.startsWith("ws") ? [address, miner.name, nminer.uThreads] : address, pass, async job => {
+                p = await connect(pool, pool.startsWith("ws") ? [address, miner.name, nminer.uThreads] : address, pass, agent, async job => {
                     jobCount++;
                     nminer.pause();
                     const { diff, txnCount } = nminer.job(job.job_id, job.target, job.blob, temp_blob != job.blob);
