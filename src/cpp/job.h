@@ -158,7 +158,7 @@ namespace randomx
         uint64_t m_diff = 0;
         uint64_t m_target = 0;
         randomx_cache *m_cache = nullptr;
-        std::vector<randomx_dataset *> m_dataset = {};
+        randomx_dataset *m_dataset = nullptr;
         std::shared_ptr<randomx_machine> m_machine;
         
         uint8_t m_seed[kMaxSeedSize];
@@ -201,8 +201,8 @@ namespace randomx
                 m_machine->machine[i]->nonce = i;
         };
 
-        bool alloc(const std::string &mode, int numaCores);
-        bool init(const std::string &mode, int numaCores, size_t threads, const std::string &seed_hash);
+        bool alloc(const std::string &mode);
+        bool init(const std::string &mode, size_t threads, const std::string &seed_hash);
 
         void cleanup()
         {
@@ -218,11 +218,10 @@ namespace randomx
 
             m_machine->machine.clear();
             m_machine->closed = false;
-            if (m_dataset.size() > 0)
+            if (m_dataset)
             {
-                for (size_t i = 0; i < m_dataset.size(); i++)
-                    randomx_release_dataset(m_dataset[i]);
-                m_dataset.clear();
+                randomx_release_dataset(m_dataset);
+                m_dataset = nullptr;
             };
 
             if (m_cache)
@@ -237,6 +236,6 @@ namespace randomx
 
         void pause();
         void start();
-        void start(const std::string &mode, int cpuCores, size_t threads);
+        void start(const std::string &mode, size_t threads);
     };
 };

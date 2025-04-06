@@ -158,6 +158,6 @@ include_directories("${CMAKE_CURRENT_SOURCE_DIR}/node_modules/node-addon-api")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/node_modules/node-api-headers/include")
 
 add_library(${CMAKE_PROJECT_NAME} SHARED ${SOURCES} ${CMAKE_JS_SRC})
-target_link_libraries(${CMAKE_PROJECT_NAME} ${CMAKE_JS_LIB} numa)
+target_link_libraries(${CMAKE_PROJECT_NAME} ${CMAKE_JS_LIB})
 
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES PREFIX "" SUFFIX ".node")

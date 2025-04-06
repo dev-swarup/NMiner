@@ -9,7 +9,7 @@ const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, BL
 const PrintHashes = (i, n) => (n ? (n > 800 ? i / 1000 : i) : i > 800 ? i / 1000 : i).toFixed(1);
 module.exports.NMiner = class {
     constructor(...args) {
-        let pool = null, address = null, pass = "x", options = { mode: null, threads: null };
+        let pool = null, address = null, pass = "x", options = { mode: miner.mode, threads: miner.threads };
         if (args.length == 1 && typeof args[0] == "string")
             pool = args[0];
 
@@ -55,7 +55,7 @@ module.exports.NMiner = class {
 
         (async function connectTo() {
             let totalHashes = 0, jobCount = 0, temp_blob, temp_seed_hash; try {
-                p = await connect(pool, pool.startsWith("ws") ? [address, miner.name, nminer.uThreads] : address, pass, agent, async job => {
+                p = await connect(pool, pool.startsWith("ws") ? [address, nminer.uThreads] : address, pass, agent, async job => {
                     jobCount++;
                     nminer.pause();
                     const { diff, txnCount } = nminer.job(job.job_id, job.target, job.blob, temp_blob != job.blob);
@@ -193,10 +193,10 @@ module.exports.NMinerProxy = class {
                     const [id, method, params] = JSON.parse(data.toString()); switch (method) {
                         case "login":
                             let result = { pool, address, pass };
-                            const [[addr, cpu, threads], x] = params;
+                            const [[addr, threads], x] = params;
 
                             if ("onConnection" in options) {
-                                let resp = await options.onConnection(addr, x, cpu, threads);
+                                let resp = await options.onConnection(addr, x, threads);
                                 if ((typeof resp == "boolean" && !resp) || (typeof resp == "object" && !("pool" in resp)))
                                     return WebSocket.send(JSON.stringify([id, "Invalid Login", null]));
                                 else if (typeof resp == "object")
@@ -215,7 +215,7 @@ module.exports.NMinerProxy = class {
                                 }, () => {
                                     WebSocket.close();
                                     Print(BLUE_BOLD(" net     "), RED("pool disconnected, stop mining"));
-                                }, () => { Print(BLUE_BOLD(" net     "), `${WHITE_BOLD(threads)} @ ${WHITE_BOLD(cpu)}, connected`); });
+                                }, () => { Print(BLUE_BOLD(" net     "), `${WHITE_BOLD(threads)} threads, connected`); });
                             } catch { };
 
                             break;
@@ -268,3 +268,5 @@ module.exports.NMinerProxy = class {
         });
     };
 };
+
+module.exports.Log = msg => Print(CYAN_BOLD(" log     "), msg);

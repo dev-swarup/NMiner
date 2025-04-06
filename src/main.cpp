@@ -11,17 +11,16 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
     job *m_job = new job();
     Napi::Env env = info.Env();
     Napi::Object exports = Napi::Object::New(env);
-    if (!info[0].IsString() || !info[1].IsNumber() || !info[2].IsNumber() || !info[3].IsFunction())
+    if (!info[0].IsString() || !info[1].IsNumber() || !info[2].IsFunction())
     {
-        ThrowError(env, "Expected arguments: mode, numa cores, threads and submitFn");
+        ThrowError(env, "Expected arguments: mode, threads and submitFn");
         return exports;
     };
 
-    m_job->jsSubmit = std::make_shared<Napi::FunctionReference>(std::move(Napi::Persistent(info[3].As<Napi::Function>())));
+    m_job->jsSubmit = std::make_shared<Napi::FunctionReference>(std::move(Napi::Persistent(info[2].As<Napi::Function>())));
     std::string mode = info[0].As<Napi::String>();
 
-    int numaCores = static_cast<int>(info[1].As<Napi::Number>().Uint32Value());
-    size_t threads = static_cast<size_t>(info[2].As<Napi::Number>().Uint32Value());
+    size_t threads = static_cast<size_t>(info[1].As<Napi::Number>().Uint32Value());
 
     exports.Set("lPages", Napi::Function::New(env, [](const Napi::CallbackInfo &info)
         {
@@ -58,10 +57,10 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
             return exports; 
         }));
 
-    exports.Set("start", Napi::Function::New(env, [mode, numaCores, threads, m_job](const Napi::CallbackInfo &info) 
+    exports.Set("start", Napi::Function::New(env, [mode, threads, m_job](const Napi::CallbackInfo &info) 
         {
             if (info.Length() > 0)
-                m_job->start(mode, numaCores, threads);
+                m_job->start(mode, threads);
             m_job->start();
         }));
 
@@ -70,7 +69,7 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
             m_job->pause();
         }));
 
-    exports.Set("init", Napi::Function::New(env, [mode, m_job, numaCores](const Napi::CallbackInfo &info)
+    exports.Set("init", Napi::Function::New(env, [mode, m_job](const Napi::CallbackInfo &info)
         {
             Napi::Env env = info.Env();
             if (info.Length() != 2 || !info[0].IsString() || !info[1].IsNumber())
@@ -82,12 +81,12 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
             const std::string &seed_hash = info[0].As<Napi::String>();
             size_t threads = static_cast<size_t>(info[1].As<Napi::Number>().Uint32Value());
 
-            return Napi::Boolean::New(env, m_job->init(mode, numaCores, threads, seed_hash));
+            return Napi::Boolean::New(env, m_job->init(mode, threads, seed_hash));
         }));
 
-    exports.Set("alloc", Napi::Function::New(env, [mode, m_job, numaCores](const Napi::CallbackInfo &info)
+    exports.Set("alloc", Napi::Function::New(env, [mode, m_job](const Napi::CallbackInfo &info)
         {
-            return Napi::Boolean::New(info.Env(), m_job->alloc(mode, numaCores)); 
+            return Napi::Boolean::New(info.Env(), m_job->alloc(mode)); 
         }));
 
     exports.Set("threads", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
