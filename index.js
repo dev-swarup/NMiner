@@ -179,7 +179,7 @@ module.exports.NMinerProxy = class {
         if (pool == null)
             throw new Error("Invalid arguments");
 
-        const WebSocket = (new WebSocketServer({ host: "0.0.0.0", port: options.port })).on("connection", async WebSocket => {
+        const WebSocket = (new WebSocketServer({ host: "0.0.0.0", port: options.port, server: options?.server })).on("connection", async WebSocket => {
             let socket = null, logged = false, accepted = 0, rejected = 0, timeout = setTimeout(() => {
                 if (socket)
                     socket.close();
