@@ -46,7 +46,7 @@ jobs:
         with:
           name: nminer-${{ matrix.config.os }}
           path: nminer-${{ matrix.config.os }}.tar.gz
-  
+
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
@@ -69,18 +69,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Ubuntu 22.04 build
-        uses: actions/upload-release-asset@v1
+      - name: Upload Release
+        uses: softprops/action-gh-release@v1
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/nminer-ubuntu-22.04/nminer-ubuntu-22.04.tar.gz
-          asset_name: nminer-ubuntu-22.04.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload Ubuntu 24.04 build
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/nminer-ubuntu-24.04/nminer-ubuntu-24.04.tar.gz
-          asset_name: nminer-ubuntu-24.04.tar.gz
-          asset_content_type: application/gzip
+          tag_name: v1.1.0
+          name: NMiner v1.1.0
+          draft: true
+          files: |
+            artifacts/nminer-ubuntu-22.04/nminer-ubuntu-22.04.tar.gz
+            artifacts/nminer-ubuntu-24.04/nminer-ubuntu-24.04.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
