@@ -12,7 +12,6 @@ jobs:
     strategy:
       matrix:
         config:
-          - { os: ubuntu-20.04 }
           - { os: ubuntu-22.04 }
           - { os: ubuntu-24.04 }
 
@@ -40,10 +39,48 @@ jobs:
 
       - name: Package NMiner
         run: |
-          tar -czvf nminer.tar.gz package.json index.js index.d.ts LICENSE build/Release/NMiner.node src/js/*.js
-      
-      - name: Upload NMiner
+          tar -czvf nminer-${{ matrix.config.os }}.tar.gz package.json index.js index.d.ts LICENSE build/Release/NMiner.node src/js/*.js
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nminer-${{matrix.config.os}}.tar.gz
-          path: nminer.tar.gz
+          name: nminer-${{ matrix.config.os }}
+          path: nminer-${{ matrix.config.os }}.tar.gz
+  
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    
+    needs: ubuntu
+    steps:
+      - name: Download Files
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+        
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: v1.1.0
+          release_name: NMiner v1.1.0
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Ubuntu 22.04 build
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./artifacts/nminer-ubuntu-22.04/nminer-ubuntu-22.04.tar.gz
+          asset_name: nminer-ubuntu-22.04.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload Ubuntu 24.04 build
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./artifacts/nminer-ubuntu-24.04/nminer-ubuntu-24.04.tar.gz
+          asset_name: nminer-ubuntu-24.04.tar.gz
+          asset_content_type: application/gzip
