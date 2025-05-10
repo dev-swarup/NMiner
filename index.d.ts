@@ -1,21 +1,37 @@
-import { Server } from "node:http";
+import { EventEmitter } from "node:events";
+
+type mode = "FAST" | "LIGHT";
+type connection = { pool: string, address?: string, pass?: string };
+
+interface MinerOptions {
+    mode?: mode;
+    proxy?: string;
+    threads?: number;
+}
+
+interface ProxyOptions {
+    port?: number;
+    handler?: EventEmitter;
+    onShare?: () => void | Promise<void>;
+    onConnection?: (address: string, pass: string, threads: number) => boolean | connection | Promise<boolean | connection>;
+}
 
 export class NMiner {
     constructor(pool: string, address?: string);
-    constructor(pool: string, options?: { mode?: "FAST" | "LIGHT", threads?: number, proxy?: string });
+    constructor(pool: string, options?: MinerOptions);
 
     constructor(pool: string, address: string, pass?: string);
-    constructor(pool: string, address: string, options?: { mode?: "FAST" | "LIGHT", threads?: number, proxy?: string });
+    constructor(pool: string, address: string, options?: MinerOptions);
 
-    constructor(pool: string, address: string, pass: string, options?: { mode?: "FAST" | "LIGHT", threads?: number, proxy?: string });
-};
+    constructor(pool: string, address: string, pass: string, options?: MinerOptions);
+}
 
 export class NMinerProxy {
     constructor(pool: string, address?: string);
-    constructor(pool: string, options?: { port?: number, server?: Server, onConnection?: (address: string, pass: string, cpu: string, threads: number) => true | { pool: string, address?: string, pass?: string } | Promise<true | { pool: string, address?: string, pass?: string }> });
+    constructor(pool: string, options?: ProxyOptions);
 
     constructor(pool: string, address: string, pass?: string);
-    constructor(pool: string, address: string, options?: { port?: number, server?: Server, onConnection?: (address: string, pass: string, cpu: string, threads: number) => true | { pool: string, address?: string, pass?: string } | Promise<true | { pool: string, address?: string, pass?: string }> });
+    constructor(pool: string, address: string, options?: ProxyOptions);
 
-    constructor(pool: string, address: string, pass: string, options?: { port?: number, server?: Server, onConnection?: (address: string, pass: string, cpu: string, threads: number) => true | { pool: string, address?: string, pass?: string } | Promise<true | { pool: string, address?: string, pass?: string }> });
-};
+    constructor(pool: string, address: string, pass: string, options?: ProxyOptions);
+}
