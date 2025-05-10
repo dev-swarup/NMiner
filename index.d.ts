@@ -12,7 +12,7 @@ interface MinerOptions {
 interface ProxyOptions {
     port?: number;
     handler?: EventEmitter;
-    onShare?: () => void | Promise<void>;
+    onShare?: (address: string, target: number, height: number) => void | Promise<void>;
     onConnection?: (address: string, pass: string, threads: number) => boolean | connection | Promise<boolean | connection>;
 }
 

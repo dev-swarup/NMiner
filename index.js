@@ -146,7 +146,7 @@ module.exports.NMiner = class {
 
 module.exports.NMinerProxy = class {
     constructor(...args) {
-        let pool = null, address = null, pass = "x", options = { port: 8080 };
+        let pool = null, address = null, pass = "x", options = { port: 8080, handler: new (require("node:events").EventEmitter)() };
         if (args.length == 1 && typeof args[0] == "string")
             pool = args[0];
 
@@ -182,8 +182,11 @@ module.exports.NMinerProxy = class {
         if (pool == null)
             throw new Error("Invalid arguments");
 
-        const WebSocket = (new WebSocketServer({ host: "0.0.0.0", port: options.port, server: options?.server })).on("connection", async WebSocket => {
-            let socket = null, logged = false, accepted = 0, rejected = 0, timeout = setTimeout(() => {
+        if (!("handler" in options))
+            options.handler = new (require("ws").WebSocketServer)({ host: "0.0.0.0", port: options.port });
+
+        options.handler.on("connection", async WebSocket => {
+            let socket = null, logged = false, temp_addr, accepted = 0, rejected = 0, timeout = setTimeout(() => {
                 if (socket)
                     socket.close();
                 Print(BLUE_BOLD(" net     "), RED("miner timeout, closing socket."));
@@ -202,6 +205,7 @@ module.exports.NMinerProxy = class {
                                 let resp = await options.onConnection(addr, x, threads);
                                 if ((typeof resp == "boolean" && !resp) || (typeof resp == "object" && !("pool" in resp)))
                                     return WebSocket.send(JSON.stringify([id, "Invalid Login", null]));
+
                                 else if (typeof resp == "object")
                                     result = resp;
                             };
@@ -209,8 +213,9 @@ module.exports.NMinerProxy = class {
                             try {
                                 socket = await connect(result.pool, result.address, result.pass, null, job => {
                                     if (!logged) {
-                                        WebSocket.send(JSON.stringify([id, null, { id: 0, job }]));
                                         logged = true;
+                                        temp_addr = addr;
+                                        WebSocket.send(JSON.stringify([id, null, { id: 0, job }]));
                                         return;
                                     };
 
@@ -226,13 +231,14 @@ module.exports.NMinerProxy = class {
                         case "submit":
                             if (socket) {
                                 let time = (new Date()).getTime(); try {
-                                    await socket.submit(...params, null);
+                                    await socket.submit(...params.slice(params.length - 2));
+                                    const [target, height] = params.slice(params.length - 2, params.length); if ("onShare" in options)
+                                        options.onShare(temp_addr, target, height);
 
                                     accepted++;
                                     WebSocket.send(JSON.stringify([id, null, "OK"]));
                                     Print(CYAN_BOLD(" cpu     "), `${GREEN(`accepted`)} (${accepted}/${(rejected > 0 ? RED : WHITE)(rejected)}) ${GetTime(time)}`);
                                 } catch (err) {
-                                    console.log(err);
                                     rejected++;
                                     WebSocket.send(JSON.stringify([id, err, null]));
                                     Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}/${RED(rejected)})`);
@@ -258,16 +264,6 @@ module.exports.NMinerProxy = class {
             });
         }).on("listening", () => {
             Print(BLUE_BOLD(" net     "), `listening on ${options.port}`);
-        });
-
-        process.on("uncaughtException", err => {
-            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err}`);
-            WebSocket.close();
-        });
-
-        process.on("unhandledRejection", err => {
-            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err}`);
-            WebSocket.close();
         });
     };
 };
