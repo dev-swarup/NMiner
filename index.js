@@ -1,15 +1,13 @@
 const os = require("os");
 const miner = require("./src/js/miner.js");
-const { connect } = require("./src/js/pool.js");
-const ProxyAgent = require('https-proxy-agent').HttpsProxyAgent;
-
-const { WebSocketServer } = require("ws");
+const { connect, multiConnect } = require("./src/js/pool.js"), { ProxyAgent } = require('proxy-agent');
 const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
 
+const PrintDiff = i => i >= 100000000 ? `${Math.round(i / 1000000)}M` : i;
 const PrintHashes = (i, n) => (n ? (n > 800 ? i / 1000 : i) : i > 800 ? i / 1000 : i).toFixed(1);
 module.exports.NMiner = class {
     constructor(...args) {
-        let pool = null, address = null, pass = "x", options = { mode: miner.mode, threads: miner.threads };
+        let pool = null, address = null, pass = "x", options = {};
         if (args.length == 1 && typeof args[0] == "string")
             pool = args[0];
 
@@ -45,6 +43,9 @@ module.exports.NMiner = class {
         if (pool == null)
             throw new Error("Invalid arguments");
 
+        if ("proxy" in options && process.isBun)
+            throw new Error("Bun does not support proxy agent yet, see docs.");
+
         let p, accepted = 0, rejected = 0, submitFn, agent, nminer = miner.init(options.mode, options.threads, (...args) => submitFn(...args));
         if ("proxy" in options)
             agent = new ProxyAgent(options.proxy);
@@ -54,14 +55,16 @@ module.exports.NMiner = class {
         console.log(GREEN(" * "), `${WHITE_BOLD("HUGE PAGES")}       ${(hugePages == 0 ? GREEN : hugePages == -1 ? RED : YELLOW)(hugePages == 0 ? "supported" : hugePages == -1 ? "disabled" : "restart required")}`);
 
         (async function connectTo() {
-            let totalHashes = 0, jobCount = 0, temp_blob, temp_seed_hash; try {
-                p = await connect(pool, pool.startsWith("ws") ? [address, nminer.uThreads] : address, pass, agent, async job => {
+            let totalHashes = 0, jobCount = 0, temp_diff, temp_blob, temp_height, temp_seed_hash; try {
+                p = await connect(pool, pool.startsWith("ws") ? [address, nminer.threads] : address, pass, agent, async job => {
                     jobCount++;
                     nminer.pause();
                     const { diff, txnCount } = nminer.job(job.job_id, job.target, job.blob, temp_blob != job.blob);
-                    Print(BLUE_BOLD(" net     "), `${MAGENTA("new job")} from ${p.host} diff ${WHITE_BOLD(diff)} algo ${WHITE_BOLD("rx/0")}${"height" in job ? ` height ${WHITE_BOLD(job.height)}` : ""}${txnCount > 0 ? ` (${txnCount} tx)` : ""}`);
+                    Print(BLUE_BOLD(" net     "), `${MAGENTA("new job")} from ${p.host} diff ${WHITE_BOLD(PrintDiff(diff))} algo ${WHITE_BOLD("rx/0")}${"height" in job ? ` height ${WHITE_BOLD(job.height)}` : ""}${txnCount > 0 ? ` (${txnCount} tx)` : ""}`);
 
+                    temp_diff = diff;
                     temp_blob = job.blob;
+                    temp_height = job.height;
                     if (temp_seed_hash != job.seed_hash) {
                         nminer.cleanup();
                         Print(BLUE_BOLD(" randomx "), `${MAGENTA("init dataset")} algo ${WHITE_BOLD("rx/0")} (${CYAN(os.cpus().length + "")} threads) ${GRAY("seed " + job.seed_hash.slice(0, 16) + "...")}`);
@@ -71,7 +74,7 @@ module.exports.NMiner = class {
 
                             if (nminer.init(job.seed_hash, os.cpus().length)) {
                                 Print(BLUE_BOLD(" randomx "), `${GREEN("dataset ready")} ${GetTime(time)}`);
-                                Print(CYAN_BOLD(" cpu     "), `use profile ${BLUE_BOLD(" rx ")} (${CYAN(nminer.uThreads)} threads)`);
+                                Print(CYAN_BOLD(" cpu     "), `use profile ${BLUE_BOLD(" rx ")} (${CYAN(nminer.threads)} threads)`);
                             } else {
                                 Print(BLUE_BOLD(" randomx "), RED(`Failed to intialize ${BOLD("RandomX")} dataset.`));
                                 return;
@@ -94,7 +97,7 @@ module.exports.NMiner = class {
 
                 submitFn = async (...args) => {
                     try {
-                        let time = (new Date()).getTime(); const target = await p.submit(...args);
+                        let time = (new Date()).getTime(); const target = await p.submit(...args, temp_diff, temp_height);
 
                         accepted++;
                         totalHashes += target;
@@ -113,7 +116,7 @@ module.exports.NMiner = class {
                     lastAcceptedCount = accepted;
                     const threads = nminer.threads();
                     const hashrate = nminer.hashrate();
-                    Print(CYAN_BOLD(" cpu     "), `speed ${CYAN_BOLD(" cpu ")} ${PrintHashes(hashrate)} ${BLUE_BOLD(" pool ")} ${PrintHashes((totalHashes - lastTotalHashes) / 300, hashrate)} ${hashrate > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(nminer.uThreads == threads ? CYAN : RED)(threads)}/${nminer.uThreads})`)}`);
+                    Print(CYAN_BOLD(" cpu     "), `speed ${CYAN_BOLD(" cpu ")} ${PrintHashes(hashrate)} ${BLUE_BOLD(" pool ")} ${PrintHashes((totalHashes - lastTotalHashes) / 300, hashrate)} ${hashrate > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(nminer.threads == threads ? CYAN : RED)(threads)}/${nminer.threads})`)}`);
 
                     lastTotalHashes = totalHashes;
                 }, 5 * 60000);

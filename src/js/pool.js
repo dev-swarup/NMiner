@@ -1,31 +1,43 @@
-const log = require("./log.js"), { WebSocket: Socket } = require("ws"),
-    Tcp = (host, port) => new Promise(async (resolve, reject) => {
-        let resolved = false; const t = (await import("node:tls")).connect({ host, port, rejectUnauthorized: false }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", async () => {
-            if (!resolved) {
-                const t = (await import("node:net")).createConnection({ host, port }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", () => {
-                    if (!resolved) {
-                        resolved = true;
-                        reject(`Failed to connect ${host}:${port}`);
-                    };
-                });
-            };
-        });
+const log = require("./log.js"), Socket = process.isBun ? WebSocket : require("ws").WebSocket,
+    Tcp = (host, port, agent) => new Promise(async (resolve, rej) => {
+        let resolved = false; reject = () => {
+            resolved = true;
+            rej(`Failed to connect ${host}:${port}`);
+        };
+
+        try {
+            const socket = await (() => new Promise(async (resolve, reject) => {
+                let resolved = false;
+
+                if (agent)
+                    agent.connect({ host, port }, (err, socket) => err ? reject() : resolve(socket));
+                else {
+                    const t = (await import("node:net")).createConnection({ host, port }, async () => { resolved = true; setTimeout(() => resolve(t), 10); }).once("error", () => {
+                        if (!resolved)
+                            reject();
+                    });
+                };
+            }))();
+
+            const t = (await import("node:tls")).connect({ socket, servername: host, rejectUnauthorized: false }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", () => {
+                socket.removeAllListeners();
+                if (!resolved) {
+                    resolved = true;
+                    setTimeout(() => resolve(socket), 100);
+                };
+            });
+        } catch { reject(); };
     }),
-    WebSocket = (url, agent) => new Promise(async (resolve, reject) => {
-        let u = new URL(url), resolved = false; const t = (new Socket(url, { agent })).on("open", () => {
+    Wss = (url, agent) => new Promise(async (resolve, rej) => {
+        let u = new URL(url), resolved = false; reject = () => {
+            resolved = true;
+            rej(`Failed to connect ${u.host}`);
+        };
+
+        const t = (new Socket(url, process.isBun ? {} : { agent })).on("open", () => {
             resolved = true;
             setTimeout(() => resolve(t), 100);
-        }).on("error", () => {
-            if (!resolved) {
-                resolved = true;
-                reject(`Failed to connect ${u.host}`);
-            };
-        }).on("close", () => {
-            if (!resolved) {
-                resolved = true;
-                reject(`Failed to connect ${u.host}`);
-            };
-        });
+        }).on("error", () => resolved ? null : reject()).on("close", () => resolved ? null : reject());
     });
 
 const init = (url, agent) => new Promise(async (resolve, reject) => {
@@ -37,7 +49,7 @@ const init = (url, agent) => new Promise(async (resolve, reject) => {
             if (i in sockets && !sockets[i].closed)
                 return;
 
-            sockets[i] = { id: 1, closed: false, promises: new Map(), socket: isWebSocket ? await WebSocket(url, agent) : await Tcp(u.hostname, u.port, agent) };
+            sockets[i] = { id: 1, closed: false, promises: new Map(), socket: isWebSocket ? await Wss(url, agent) : await Tcp(u.hostname, u.port, agent) };
             return sockets[i].socket.on("close", () => { sockets[i].closed ? null : e.emit("close", i); sockets[i].closed = true; }).on("end", () => { sockets[i].closed ? null : e.emit("close", i); sockets[i].closed = true; }).on(isWebSocket ? "message" : "data", async data => {
                 try {
                     data = JSON.parse(data.toString()); if (isWebSocket) {
@@ -65,7 +77,7 @@ const init = (url, agent) => new Promise(async (resolve, reject) => {
                             sockets[i].promises.delete(data.id);
                         };
                     };
-                } catch (err) { log.Print(log.YELLOW_BOLD(" signal  "), "Program Error: " + err); };
+                } catch (err) { log.Print(log.YELLOW_BOLD(" signal  "), "JSON Error: " + err); };
             });
         };
 
@@ -136,11 +148,11 @@ const multiConnect = (url, address, pass = "x", agent, on_job = () => { }, on_cl
         });
 
         await Fn(0); resolve({
-            host: pool.hostname, remoteHost: pool.remoteHost, isWebSocket: pool.isWebSocket, submit: (i, job_id, nonce, result, target) => new Promise((resolve, reject) => {
+            host: pool.hostname, remoteHost: pool.remoteHost, isWebSocket: pool.isWebSocket, submit: (i, job_id, nonce, result, target, height) => new Promise((resolve, reject) => {
                 if (sessions[i].closed)
                     return reject("pool disconnected, late response", target);
 
-                pool.send(i, "submit", pool.isWebSocket ? [job_id, nonce, result] : { id: sessions[i].id, job_id, nonce, result })
+                pool.send(i, "submit", pool.isWebSocket ? [job_id, nonce, result, target, height] : { id: sessions[i].id, job_id, nonce, result })
                     .then(() => resolve(target)).catch(reject);
             }), close: i => { sessions[i].closed = true; pool.close(i); }, reconnect: async i => {
                 await pool.connect(i); await Fn(i);
@@ -154,7 +166,7 @@ module.exports.connect = (url, address, pass = "x", agent, on_job = () => { }, o
         const pool = await multiConnect(url, address, pass, agent, (i, job) => on_job(job), () => { on_close(); return true; }, () => on_connect());
 
         return resolve({
-            host: pool.host, remoteHost: pool.remoteHost, submit: (job_id, nonce, result, target) => pool.submit(0, job_id, nonce, result, target),
+            host: pool.host, remoteHost: pool.remoteHost, submit: (job_id, nonce, result, target, height) => pool.submit(0, job_id, nonce, result, target, height),
             close: () => pool.close(0),
             reconnect: () => pool.reconnect(0),
         });
