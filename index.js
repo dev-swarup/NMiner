@@ -54,6 +54,9 @@ module.exports.NMiner = class {
         console.log(GREEN(" * "), `${WHITE_BOLD("1GB PAGES")}        ${(lPages == 0 ? GREEN : lPages == -1 ? RED : YELLOW)(lPages == 0 ? "supported" : lPages == -1 ? "disabled" : "restart required")}`);
         console.log(GREEN(" * "), `${WHITE_BOLD("HUGE PAGES")}       ${(hugePages == 0 ? GREEN : hugePages == -1 ? RED : YELLOW)(hugePages == 0 ? "supported" : hugePages == -1 ? "disabled" : "restart required")}`);
 
+        if ("proxy" in options && !pool.startsWith("ws"))
+            Print(YELLOW_BOLD(" warn    "), "Proxy is not yet supported by TCP Connection");
+
         (async function connectTo() {
             let totalHashes = 0, jobCount = 0, temp_diff, temp_blob, temp_height, temp_seed_hash; try {
                 p = await connect(pool, pool.startsWith("ws") ? [address, nminer.threads] : address, pass, agent, async job => {
@@ -127,7 +130,7 @@ module.exports.NMiner = class {
         process.on("SIGTERM", () => { nminer.cleanup(); process.exit(); });
 
         process.on("uncaughtException", err => {
-            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err}`);
+            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")}`);
             nminer.cleanup();
 
             if (p)
@@ -135,7 +138,7 @@ module.exports.NMiner = class {
         });
 
         process.on("unhandledRejection", err => {
-            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err}`);
+            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")}`);
             nminer.cleanup();
 
             if (p)

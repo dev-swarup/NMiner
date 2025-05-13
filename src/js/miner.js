@@ -6,8 +6,8 @@ module.exports.init = (mode, threads, submitFn) => {
     options.threads = typeof threads == "number" ? threads : options.threads;
 
     try {
-        return { ...require("../../build/NMiner.node").init(mode, threads, submitFn), ...options };
+        return { ...require("../../build/NMiner.node").init(options.mode, options.threads, submitFn), ...options };
     } catch {
-        return { ...require("../../build/Release/NMiner.node").init(mode, threads, submitFn), ...options };
+        return { ...require("../../build/Release/NMiner.node").init(options.mode, options.threads, submitFn), ...options };
     };
 };

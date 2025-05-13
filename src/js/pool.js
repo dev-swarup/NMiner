@@ -1,32 +1,15 @@
 const log = require("./log.js"), Socket = process.isBun ? WebSocket : require("ws").WebSocket,
-    Tcp = (host, port, agent) => new Promise(async (resolve, rej) => {
-        let resolved = false; reject = () => {
-            resolved = true;
-            rej(`Failed to connect ${host}:${port}`);
-        };
-
-        try {
-            const socket = await (() => new Promise(async (resolve, reject) => {
-                let resolved = false;
-
-                if (agent)
-                    agent.connect({ host, port }, (err, socket) => err ? reject() : resolve(socket));
-                else {
-                    const t = (await import("node:net")).createConnection({ host, port }, async () => { resolved = true; setTimeout(() => resolve(t), 10); }).once("error", () => {
-                        if (!resolved)
-                            reject();
-                    });
-                };
-            }))();
-
-            const t = (await import("node:tls")).connect({ socket, servername: host, rejectUnauthorized: false }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", () => {
-                socket.removeAllListeners();
-                if (!resolved) {
-                    resolved = true;
-                    setTimeout(() => resolve(socket), 100);
-                };
-            });
-        } catch { reject(); };
+    Tcp = (host, port) => new Promise(async (resolve, rej) => {
+        let resolved = false; const t = (await import("node:tls")).connect({ host, port, rejectUnauthorized: false }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", async () => {
+            if (!resolved) {
+                const t = (await import("node:net")).createConnection({ host, port }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", () => {
+                    if (!resolved) {
+                        resolved = true;
+                        reject(`Failed to connect ${host}:${port}`);
+                    };
+                });
+            };
+        });
     }),
     Wss = (url, agent) => new Promise(async (resolve, rej) => {
         let u = new URL(url), resolved = false; reject = () => {
