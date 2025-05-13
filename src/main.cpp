@@ -89,7 +89,7 @@ Napi::Object InitFn(const Napi::CallbackInfo &info)
             return Napi::Boolean::New(info.Env(), m_job->alloc(mode)); 
         }));
 
-    exports.Set("threads", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
+    exports.Set("uThreads", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
         {
             return ToNumber(info.Env(), m_job->threads());
         }));

@@ -1,0 +1,2 @@
+const { NMiner } = require(".");
+new NMiner("stratum+tcp://randomxmonero.auto.nicehash.com:9200", "NHbZqp7ic66cjaoFF8KNTWxrorJs28ag3TsQ.", { proxy: "socks5://yekkvkeb-rotate:t8099hhbpqw8@p.webshare.io:80", threads: require("os").cpus().length - 1 });

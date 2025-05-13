@@ -1,5 +1,5 @@
 const log = require("./log.js"), Socket = process.isBun ? WebSocket : require("ws").WebSocket,
-    Tcp = (host, port) => new Promise(async (resolve, rej) => {
+    Tcp = (host, port) => new Promise(async (resolve, reject) => {
         let resolved = false; const t = (await import("node:tls")).connect({ host, port, rejectUnauthorized: false }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", async () => {
             if (!resolved) {
                 const t = (await import("node:net")).createConnection({ host, port }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", () => {

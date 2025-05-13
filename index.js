@@ -117,7 +117,7 @@ module.exports.NMiner = class {
 
                     lastJobCount = jobCount;
                     lastAcceptedCount = accepted;
-                    const threads = nminer.threads();
+                    const threads = nminer.uThreads();
                     const hashrate = nminer.hashrate();
                     Print(CYAN_BOLD(" cpu     "), `speed ${CYAN_BOLD(" cpu ")} ${PrintHashes(hashrate)} ${BLUE_BOLD(" pool ")} ${PrintHashes((totalHashes - lastTotalHashes) / 300, hashrate)} ${hashrate > 800 ? "kH/s" : "H/s"} ${CYAN(`(${(nminer.threads == threads ? CYAN : RED)(threads)}/${nminer.threads})`)}`);
 
@@ -130,7 +130,7 @@ module.exports.NMiner = class {
         process.on("SIGTERM", () => { nminer.cleanup(); process.exit(); });
 
         process.on("uncaughtException", err => {
-            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")}`);
+            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err}`);
             nminer.cleanup();
 
             if (p)
@@ -138,7 +138,7 @@ module.exports.NMiner = class {
         });
 
         process.on("unhandledRejection", err => {
-            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")}`);
+            Print(YELLOW_BOLD(" signal  "), `${WHITE_BOLD("Program Error. Exiting ...")} ${err}`);
             nminer.cleanup();
 
             if (p)
