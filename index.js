@@ -58,14 +58,13 @@ module.exports.NMiner = class {
             Print(YELLOW_BOLD(" warn    "), "Proxy is not yet supported by TCP Connection");
 
         (async function connectTo() {
-            let totalHashes = 0, jobCount = 0, temp_diff, temp_blob, temp_height, temp_seed_hash; try {
+            let totalHashes = 0, jobCount = 0, temp_blob, temp_height, temp_seed_hash; try {
                 p = await connect(pool, pool.startsWith("ws") ? [address, nminer.threads] : address, pass, agent, async job => {
                     jobCount++;
                     nminer.pause();
                     const { diff, txnCount } = nminer.job(job.job_id, job.target, job.blob, temp_blob != job.blob);
                     Print(BLUE_BOLD(" net     "), `${MAGENTA("new job")} from ${p.host} diff ${WHITE_BOLD(PrintDiff(diff))} algo ${WHITE_BOLD("rx/0")}${"height" in job ? ` height ${WHITE_BOLD(job.height)}` : ""}${txnCount > 0 ? ` (${txnCount} tx)` : ""}`);
 
-                    temp_diff = diff;
                     temp_blob = job.blob;
                     temp_height = job.height;
                     if (temp_seed_hash != job.seed_hash) {
@@ -100,7 +99,7 @@ module.exports.NMiner = class {
 
                 submitFn = async (...args) => {
                     try {
-                        let time = (new Date()).getTime(); const target = await p.submit(...args, temp_diff, temp_height);
+                        let time = (new Date()).getTime(); const target = await p.submit(...args, temp_height);
 
                         accepted++;
                         totalHashes += target;
@@ -234,7 +233,7 @@ module.exports.NMinerProxy = class {
                         case "submit":
                             if (socket) {
                                 let time = (new Date()).getTime(); try {
-                                    await socket.submit(...params.slice(params.length - 2));
+                                    await socket.submit(...params.slice(0, params.length - 2));
                                     const [target, height] = params.slice(params.length - 2, params.length); if ("onShare" in options)
                                         options.onShare(temp_addr, target, height);
 
