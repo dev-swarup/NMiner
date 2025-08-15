@@ -121,35 +121,35 @@ bool randomx::job::init(const std::string &mode, size_t threads, const std::stri
     {
         const uint64_t dataset_count = randomx_dataset_item_count();
         if (threads > 1)
+        {
+            std::vector<std::thread> m_threads;
+            m_threads.reserve(threads);
+
+            for (uint64_t i = 0; i < threads; ++i)
             {
-                std::vector<std::thread> m_threads;
-                m_threads.reserve(threads);
+                const uint32_t start = (dataset_count * i) / threads;
+                const uint32_t end = (dataset_count * (i + 1)) / threads;
 
-                for (uint64_t i = 0; i < threads; ++i)
-                {
-                    const uint32_t start = (dataset_count * i) / threads;
-                    const uint32_t end = (dataset_count * (i + 1)) / threads;
-
-                    m_threads.emplace_back([this, start, size = end - start]()
+                m_threads.emplace_back([this, start, size = end - start]()
+                    {
+                        if (size % 5)
                         {
-                            if (size % 5)
-                            {
-                                randomx_init_dataset(m_dataset, m_cache, start, size - (size % 5));
-                                randomx_init_dataset(m_dataset, m_cache, start + size - 5, 5);
-                            }
-                            else
-                                randomx_init_dataset(m_dataset, m_cache, start, size);
-                        });
-                };
+                            randomx_init_dataset(m_dataset, m_cache, start, size - (size % 5));
+                            randomx_init_dataset(m_dataset, m_cache, start + size - 5, 5);
+                        }
+                        else
+                            randomx_init_dataset(m_dataset, m_cache, start, size);
+                    });
+            };
 
-                for (auto &t : m_threads)
-                {
-                    if (t.joinable())
-                        t.join();
-                };
-            }
-            else
-                randomx_init_dataset(m_dataset, m_cache, 0, dataset_count);
+            for (auto &t : m_threads)
+            {
+                if (t.joinable())
+                    t.join();
+            };
+        }
+        else
+            randomx_init_dataset(m_dataset, m_cache, 0, dataset_count);
 
         randomx_release_cache(m_cache);
         m_cache = nullptr;
@@ -170,7 +170,7 @@ void randomx::job::start()
 
 int randomx::job::hashrate()
 {
-    int hashes = m_hashes - m_last_hashes;
+    int hashes = m_hashes.load(std::memory_order_relaxed) - m_last_hashes;
     int duration = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - m_last_time).count();
 
     m_last_hashes += hashes;
@@ -201,8 +201,14 @@ void randomx::job::start(const std::string &mode, size_t threads)
         std::memcpy(machine->blob, m_blob, kMaxBlobSize);
 
         machine->nonce = i;
-        machine->m_thread = std::thread([this, threads, machine, tsfn]()
+        machine->m_thread = std::thread([this, i, threads, machine, tsfn]()
             {
+                cpu_set_t cpuset;
+                CPU_ZERO(&cpuset);
+
+                CPU_SET(i, &cpuset);
+                pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
                 while (!m_machine->closed)
                 {
                     if (m_machine->paused)
@@ -217,16 +223,13 @@ void randomx::job::start(const std::string &mode, size_t threads)
                     else
                         machine->nonce += threads;
 
-                    {
-                        std::lock_guard<std::mutex> lock(m_mutex);
-                        m_hashes++;
-                    };
+                    m_hashes.fetch_add(1, std::memory_order_relaxed);
                 };
             });
         m_machine->machine.emplace_back(machine);
     };
 
-    m_hashes = 0;
+    m_hashes.store(0, std::memory_order_relaxed);
     m_last_hashes = 0;
 };
 
@@ -249,7 +252,7 @@ void randomx::job::calculate_hash(randomx_vm *vm, uint8_t blob[kMaxBlobSize], si
         if(sodium_bin2hex(result_hex, sizeof(result_hex), reinterpret_cast<unsigned char*>(&result), sizeof(result)) != 0)
             return;
 
-        tsfn.BlockingCall([this, nonce, result_hex](Napi::Env env, Napi::Function)
+        tsfn.NonBlockingCall([this, nonce, result_hex](Napi::Env env, Napi::Function)
             {
                 jsSubmit->Call({ ToString(env, job_id), ToString(env, nonce), ToString(env, result_hex), ToNumber(env, m_diff) });
             });

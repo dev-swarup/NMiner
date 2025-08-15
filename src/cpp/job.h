@@ -1,6 +1,7 @@
 #include <mutex>
 #include <chrono>
 #include <thread>
+#include <atomic>
 #include <cstring>
 #include <cstdint>
 
@@ -153,8 +154,6 @@ namespace randomx
     class job
     {
     private:
-        std::mutex m_mutex;
-
         uint64_t m_diff = 0;
         uint64_t m_target = 0;
         randomx_cache *m_cache = nullptr;
@@ -175,8 +174,8 @@ namespace randomx
             return reinterpret_cast<uint32_t *>(blob + kNonceOffset); 
         };
 
-        int m_hashes = 0;
         int m_last_hashes = 0;
+        std::atomic<int> m_hashes{0};
         std::chrono::system_clock::time_point m_last_time = std::chrono::system_clock::now();
 
         void calculate_hash(randomx_vm* vm, uint8_t blob[kMaxBlobSize], size_t size, uint32_t nonce, Napi::ThreadSafeFunction tsfn);
@@ -230,7 +229,7 @@ namespace randomx
                 m_cache = nullptr;
             };
             
-            m_hashes = 0;
+            m_hashes.store(0, std::memory_order_relaxed);
             m_last_hashes = 0;
         };
 
