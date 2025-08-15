@@ -120,14 +120,16 @@ const multiConnect = (url, address, pass = "x", agent, on_job = () => { }, on_cl
             if (i in sessions && !sessions[i].closed) {
                 if (sessions[i].interval)
                     clearInterval(sessions[i].interval);
-            };
 
-            if (await on_close(i))
-                setTimeout(async () => {
-                    try {
-                        await pool.connect(i); await Fn(i);
-                    } catch (err) { log.Print(log.BLUE_BOLD(" net     "), log.RED(err)); setTimeout(() => pool.close(i), 10000); };
-                }, 10000);
+                (async function repeat() {
+                    if (await on_close(i))
+                        setTimeout(async () => {
+                            try {
+                                await pool.connect(i); await Fn(i);
+                            } catch (err) { log.Print(log.BLUE_BOLD(" net     "), log.RED(err)); pool.close(i); repeat(); };
+                        }, 10000);
+                })();
+            };
         });
 
         await Fn(0); resolve({
