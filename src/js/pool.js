@@ -1,14 +1,59 @@
-const log = require("./log.js"), Socket = process.isBun ? WebSocket : require("ws").WebSocket,
-    Tcp = (host, port) => new Promise(async (resolve, reject) => {
-        let resolved = false; const t = (await import("node:tls")).connect({ host, port, rejectUnauthorized: false }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", async () => {
-            if (!resolved) {
-                const t = (await import("node:net")).createConnection({ host, port }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", () => {
-                    if (!resolved) {
-                        resolved = true;
-                        reject(`Failed to connect ${host}:${port}`);
-                    };
+const log = require("./log.js"), Socket = require("ws").WebSocket, { SocksClient } = require("socks"), { SocksProxyAgent } = require("socks-proxy-agent"),
+    Tcp = (host, port, agent) => new Promise(async (resolve, reject) => {
+        let socket, resolved = false;
+
+        if (agent)
+            try {
+                agent = new URL(agent);
+
+                agent.port = Number(agent.port) || 1080;
+                agent.username = agent.username.length > 0 ? decodeURIComponent(agent.username) : undefined;
+                agent.password = agent.password.length > 0 ? decodeURIComponent(agent.password) : undefined;
+
+                const client = await SocksClient.createConnection({
+                    proxy: {
+                        type: 5,
+                        host: agent.host,
+                        port: agent.port,
+                        userId: agent.username,
+                        password: agent.password
+                    },
+                    command: "connect",
+                    destination: { host, port }
                 });
-            };
+
+                socket = client.socket;
+            } catch { resolved = true; return reject(`Failed to connect to Proxy "${agent}"`); };
+
+        const t = (await import("node:tls")).connect({ ...(socket ? { socket, servername: host } : { host, port }), rejectUnauthorized: false }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", async () => {
+            if (!resolved)
+                if (agent) {
+                    if (socket.destroyed) {
+                        try {
+                            const client = await SocksClient.createConnection({
+                                proxy: {
+                                    type: 5,
+                                    host: agent.host,
+                                    port: agent.port,
+                                    userId: agent.username,
+                                    password: agent.password
+                                },
+                                command: "connect",
+                                destination: { host, port }
+                            });
+
+                            resolved = true;
+                            setTimeout(() => resolve(client.socket), 100);
+                        } catch { resolved = true; return reject(`Failed to connect to TCP Socket ${host}:${port}`); };
+                    } else { resolved = true; setTimeout(() => resolve(socket), 100); };
+                } else {
+                    const t = (await import("node:net")).createConnection({ host, port }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", () => {
+                        if (!resolved) {
+                            resolved = true;
+                            reject(`Failed to connect ${host}:${port}`);
+                        };
+                    });
+                };
         });
     }),
     Wss = (url, agent) => new Promise(async (resolve, rej) => {
@@ -17,7 +62,7 @@ const log = require("./log.js"), Socket = process.isBun ? WebSocket : require("w
             rej(`Failed to connect ${u.host}`);
         };
 
-        const t = (new Socket(url, process.isBun ? {} : { agent })).on("open", () => {
+        const t = (new Socket(url, agent ? { agent: new SocksProxyAgent(agent) } : {})).on("open", () => {
             resolved = true;
             setTimeout(() => resolve(t), 100);
         }).on("error", () => resolved ? null : reject()).on("close", () => resolved ? null : reject());
