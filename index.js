@@ -1,6 +1,6 @@
 const os = require("os");
 const miner = require("./src/js/miner.js");
-const { connect, multiConnect } = require("./src/js/pool.js"), { ProxyAgent } = require('proxy-agent');
+const { connect, multiConnect } = require("./src/js/pool.js");
 const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
 
 const PrintDiff = i => i >= 100000000 ? `${Math.round(i / 1000000)}M` : i;
@@ -43,19 +43,11 @@ module.exports.NMiner = class {
         if (pool == null)
             throw new Error("Invalid arguments");
 
-        if ("proxy" in options && process.isBun)
-            throw new Error("Bun does not support proxy agent yet, see docs.");
-
-        let p, accepted = 0, rejected = 0, submitFn, agent, nminer = miner.init(options.mode, options.threads, (...args) => submitFn(...args));
-        if ("proxy" in options)
-            agent = new ProxyAgent(options.proxy);
+        let p, accepted = 0, rejected = 0, submitFn, agent = options.proxy || null, nminer = miner.init(options.mode, options.threads, (...args) => submitFn(...args));
 
         const lPages = nminer.lPages(), hugePages = nminer.hugePages();
         console.log(GREEN(" * "), `${WHITE_BOLD("1GB PAGES")}        ${(lPages == 0 ? GREEN : lPages == -1 ? RED : YELLOW)(lPages == 0 ? "supported" : lPages == -1 ? "disabled" : "restart required")}`);
         console.log(GREEN(" * "), `${WHITE_BOLD("HUGE PAGES")}       ${(hugePages == 0 ? GREEN : hugePages == -1 ? RED : YELLOW)(hugePages == 0 ? "supported" : hugePages == -1 ? "disabled" : "restart required")}`);
-
-        if ("proxy" in options && !pool.startsWith("ws"))
-            Print(YELLOW_BOLD(" warn    "), "Proxy is not yet supported by TCP Connection");
 
         (async function connectTo() {
             let totalHashes = 0, jobCount = 0, temp_blob, temp_height, temp_seed_hash; try {
@@ -271,3 +263,4 @@ module.exports.NMinerProxy = class {
 };
 
 module.exports.Log = msg => Print(CYAN_BOLD(" log     "), msg);
+module.exports.Error = msg => Print(RED_BOLD(" error   "), RED(msg));
