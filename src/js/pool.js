@@ -1,28 +1,31 @@
 const log = require("./log.js"), Socket = require("ws").WebSocket, { SocksClient } = require("socks"), { SocksProxyAgent } = require("socks-proxy-agent"),
     Tcp = (host, port, agent) => new Promise(async (resolve, reject) => {
-        let socket, resolved = false;
+        let gt, socket, resolved = false;
 
         if (agent)
             try {
-                agent = new URL(agent);
+                gt = async () => {
+                    agent = new URL(agent);
 
-                agent.port = Number(agent.port) || 1080;
-                agent.username = agent.username.length > 0 ? decodeURIComponent(agent.username) : undefined;
-                agent.password = agent.password.length > 0 ? decodeURIComponent(agent.password) : undefined;
+                    const pt = Number(agent.port) || 1080;
+                    const username = agent.username.length > 0 ? decodeURIComponent(agent.username) : undefined;
+                    const password = agent.password.length > 0 ? decodeURIComponent(agent.password) : undefined;
 
-                const client = await SocksClient.createConnection({
-                    proxy: {
-                        type: 5,
-                        host: agent.host,
-                        port: agent.port,
-                        userId: agent.username,
-                        password: agent.password
-                    },
-                    command: "connect",
-                    destination: { host, port }
-                });
+                    const client = await SocksClient.createConnection({
+                        proxy: {
+                            type: 5,
+                            port: pt,
+                            host: agent.hostname,
+                            userId: username, password: password
+                        },
+                        command: "connect",
+                        destination: { host, port: Number(port) }
+                    });
 
-                socket = client.socket;
+                    socket = client.socket;
+                };
+
+                await gt();
             } catch { resolved = true; return reject(`Failed to connect to Proxy "${agent}"`); };
 
         const t = (await import("node:tls")).connect({ ...(socket ? { socket, servername: host } : { host, port }), rejectUnauthorized: false }, async () => { resolved = true; setTimeout(() => resolve(t), 100); }).once("error", async () => {
@@ -30,20 +33,9 @@ const log = require("./log.js"), Socket = require("ws").WebSocket, { SocksClient
                 if (agent) {
                     if (socket.destroyed) {
                         try {
-                            const client = await SocksClient.createConnection({
-                                proxy: {
-                                    type: 5,
-                                    host: agent.host,
-                                    port: agent.port,
-                                    userId: agent.username,
-                                    password: agent.password
-                                },
-                                command: "connect",
-                                destination: { host, port }
-                            });
-
+                            await gt();
                             resolved = true;
-                            setTimeout(() => resolve(client.socket), 100);
+                            setTimeout(() => resolve(socket), 100);
                         } catch { resolved = true; return reject(`Failed to connect to TCP Socket ${host}:${port}`); };
                     } else { resolved = true; setTimeout(() => resolve(socket), 100); };
                 } else {
