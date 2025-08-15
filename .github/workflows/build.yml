@@ -58,17 +58,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
-        
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        with:
-          tag_name: v1.2.0
-          release_name: NMiner v1.2.0
-          draft: true
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Release
         uses: softprops/action-gh-release@v1
