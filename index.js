@@ -178,6 +178,7 @@ module.exports.NMinerProxy = class {
 
         if (!("handler" in options))
             options.handler = new (require("ws").WebSocketServer)({ host: "0.0.0.0", port: options.port });
+        const proxy = options.proxy || null; 
 
         options.handler.on("connection", async WebSocket => {
             let socket = null, logged = false, temp_addr, accepted = 0, rejected = 0, timeout = setTimeout(() => {
@@ -192,7 +193,7 @@ module.exports.NMinerProxy = class {
                 try {
                     const [id, method, params] = JSON.parse(data.toString()); switch (method) {
                         case "login":
-                            let result = { pool, address, pass };
+                            let result = { pool, address, pass, proxy };
                             const [[addr, threads], x] = params;
 
                             if ("onConnection" in options) {
@@ -205,7 +206,7 @@ module.exports.NMinerProxy = class {
                             };
 
                             try {
-                                socket = await connect(result.pool, result.address, result.pass, null, job => {
+                                socket = await connect(result.pool, result.address, result.pass, proxy, job => {
                                     if (!logged) {
                                         logged = true;
                                         temp_addr = addr;

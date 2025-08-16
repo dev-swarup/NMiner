@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 
 type mode = "FAST" | "LIGHT";
-type connection = { pool: string, address?: string, pass?: string };
+type connection = { pool: string, address?: string, pass?: string, proxy?: string };
 
 interface MinerOptions {
     mode?: mode;
@@ -11,6 +11,7 @@ interface MinerOptions {
 
 interface ProxyOptions {
     port?: number;
+    proxy?: string;
     handler?: EventEmitter;
     onShare?: (address: string, target: number, height?: number) => void | Promise<void>;
     onConnection?: (address: string, pass: string, threads: number) => boolean | connection | Promise<boolean | connection>;
