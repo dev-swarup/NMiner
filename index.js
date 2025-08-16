@@ -1,7 +1,7 @@
 const os = require("os");
 const miner = require("./src/js/miner.js");
 const { connect, multiConnect } = require("./src/js/pool.js");
-const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
+const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, RED_BOLD, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
 
 const PrintDiff = i => i >= 100000000 ? `${Math.round(i / 1000000)}M` : i;
 const PrintHashes = (i, n) => (n ? (n > 800 ? i / 1000 : i) : i > 800 ? i / 1000 : i).toFixed(1);
