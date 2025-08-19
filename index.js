@@ -1,6 +1,6 @@
 const os = require("os");
 const miner = require("./src/js/miner.js");
-const { connect, multiConnect } = require("./src/js/pool.js");
+const { connect } = require("./src/js/pool.js");
 const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, RED_BOLD, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
 
 const PrintDiff = i => i >= 100000000 ? `${Math.round(i / 1000000)}M` : i;
@@ -140,7 +140,7 @@ module.exports.NMiner = class {
 
 module.exports.NMinerProxy = class {
     constructor(...args) {
-        let pool = null, address = null, pass = "x", options = { port: 8080, handler: new (require("node:events").EventEmitter)() };
+        let pool = null, address = null, pass = "x", options = { port: 8080 };
         if (args.length == 1 && typeof args[0] == "string")
             pool = args[0];
 
