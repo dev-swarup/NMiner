@@ -140,6 +140,9 @@ const init = (url, agent) => new Promise(async (resolve, reject) => {
 const multiConnect = (url, address, pass = "x", agent, on_job = () => { }, on_close = () => { }, on_connect = () => { }) => new Promise(async (resolve, reject) => {
     try {
         let sessions = []; const pool = await init(url, agent), Fn = i => new Promise((resolve, reject) => {
+            if (i in sessions && !sessions[i].closed)
+                return;
+
             pool.send(i, "login", pool.isWebSocket ? [address, pass] : { login: address, pass: "x", agent: "nodejs", algo: ["rx/0"] }).then(({ id: _id, job }) => {
                 resolve(); sessions[i] = {
                     id: _id, closed: false, interval: setInterval(async () => {
@@ -158,7 +161,7 @@ const multiConnect = (url, address, pass = "x", agent, on_job = () => { }, on_cl
                 if (sessions[i].interval)
                     clearInterval(sessions[i].interval);
 
-                (async function repeat() {
+                sessions[i].closed = true; (async function repeat() {
                     if (await on_close(i))
                         setTimeout(async () => {
                             try {
