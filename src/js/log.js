@@ -17,7 +17,12 @@ colors.setTheme({
 
 
 module.exports = {
-    GetTime, Print: (type, message) => console.log(`${GetTime()} ${type} ${message}`),
+    GetTime, Print: (type, message) => {
+        message = `${GetTime()} ${type} ${message}`;
+
+        console.log(message);
+        return message;
+    },
     RED: colors.red,
     BOLD: colors.bold,
     CYAN: colors.cyan,
