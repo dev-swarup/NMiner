@@ -144,7 +144,7 @@ module.exports.NMiner = class {
 
 module.exports.NMinerProxy = class {
     constructor(...args) {
-        let pool = null, address = null, pass = "x", options = { port: 8080 };
+        let pool = null, address = null, pass = "x", proxy = null, options = { port: 8080 };
         if (args.length == 1 && typeof args[0] == "string")
             pool = args[0];
 
@@ -180,9 +180,11 @@ module.exports.NMinerProxy = class {
         if (pool == null)
             throw new Error("Invalid arguments");
 
+        if (options.proxy)
+            proxy = options.proxy;
+
         if (!("handler" in options))
             options.handler = new (require("ws").WebSocketServer)({ host: "0.0.0.0", port: options.port });
-        const proxy = options.proxy || null; 
 
         options.handler.on("connection", async WebSocket => {
             let socket = null, logged = false, temp_addr, accepted = 0, rejected = 0, timeout = setTimeout(() => {
@@ -206,11 +208,11 @@ module.exports.NMinerProxy = class {
                                     return WebSocket.send(JSON.stringify([id, "Invalid Login", null]));
 
                                 else if (typeof resp == "object")
-                                    result = resp;
+                                    result = { ...result, ...resp };
                             };
 
                             try {
-                                socket = await connect(result.pool, result.address, result.pass, proxy, job => {
+                                socket = await connect(result.pool, result.address, result.pass, result.proxy, job => {
                                     if (!logged) {
                                         logged = true;
                                         temp_addr = addr;
@@ -223,7 +225,10 @@ module.exports.NMinerProxy = class {
                                     WebSocket.close();
                                     Print(BLUE_BOLD(" net     "), RED("pool disconnected, stop mining"));
                                 }, () => { Print(BLUE_BOLD(" net     "), `${WHITE_BOLD(threads)} threads, connected`); });
-                            } catch { };
+                            } catch (err) {
+                                WebSocket.send(JSON.stringify([id, err.toString(), null]));
+                                return WebSocket.close();
+                            };
 
                             break;
 
@@ -261,9 +266,8 @@ module.exports.NMinerProxy = class {
                     };
                 } catch (err) { Print(YELLOW_BOLD(" signal  "), "Program Error: " + err); };
             });
-        }).on("listening", () => {
-            Print(BLUE_BOLD(" net     "), `listening on ${options.port}`);
-        });
+        })
+            .on("listening", () => Print(BLUE_BOLD(" net     "), `listening on ${options.port}`));
     };
 };
 
