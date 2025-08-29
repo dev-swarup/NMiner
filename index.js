@@ -43,7 +43,7 @@ module.exports.NMiner = class {
         if (pool == null)
             throw new Error("Invalid arguments");
 
-        let p, accepted = 0, rejected = 0, submitFn, agent = options.proxy || null, nminer = miner.init(options.mode, options.threads, (...args) => submitFn(...args));
+        let p, accepted = 0, rejected = 0, submitFn, nminer = miner.init(options.mode, options.threads, (...args) => submitFn(...args));
 
         const lPages = nminer.lPages(), hugePages = nminer.hugePages();
         console.log(GREEN(" * "), `${WHITE_BOLD("1GB PAGES")}        ${(lPages == 0 ? GREEN : lPages == -1 ? RED : YELLOW)(lPages == 0 ? "supported" : lPages == -1 ? "disabled" : "restart required")}`);
@@ -51,7 +51,7 @@ module.exports.NMiner = class {
 
         (async function connectTo() {
             let totalHashes = 0, jobCount = 0, temp_blob, temp_height, temp_seed_hash; try {
-                p = await connect(pool, pool.startsWith("ws") ? [address, nminer.threads] : address, pass, agent, async job => {
+                p = await connect(pool, pool.startsWith("ws") ? [address, nminer.threads] : address, pass, options.proxy || null, async job => {
                     jobCount++;
                     nminer.pause();
                     const { diff, txnCount } = nminer.job(job.job_id, job.target, job.blob, temp_blob != job.blob);
@@ -87,6 +87,8 @@ module.exports.NMiner = class {
                 }, () => {
                     nminer.pause();
                     Print(BLUE_BOLD(" net     "), RED("pool disconnected, stop mining"));
+
+                    return true;
                 }, () => { Print(BLUE_BOLD(" net     "), `use pool ${CYAN(`${p.host}`)}${p.remoteHost != null ? ` ${GRAY(p.remoteHost)}` : ""}`); });
 
                 submitFn = async (...args) => {
@@ -126,6 +128,7 @@ module.exports.NMiner = class {
 
             if (p)
                 p.close();
+            process.exit(1);
         });
 
         process.on("unhandledRejection", err => {
@@ -134,6 +137,7 @@ module.exports.NMiner = class {
 
             if (p)
                 p.close();
+            process.exit(1);
         });
     };
 };
