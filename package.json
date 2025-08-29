@@ -1,7 +1,7 @@
 {
     "name": "nminer",
     "main": "index.js",
-    "version": "v1.2.1",
+    "version": "v1.2.2",
     "typings": "index.d.ts",
     "scripts": {
         "build": "cmake-js -p${nproc} compile"
@@ -16,7 +16,7 @@
         "socks-proxy-agent": "^8.0.5"
     },
     "devDependencies": {
-        "@types/bun": "^1.2.20",
+        "@types/bun": "^1.2.21",
         "@types/node": "^24.3.0"
     },
     "engines": {
