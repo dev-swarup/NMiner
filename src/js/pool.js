@@ -12,6 +12,7 @@ dns.setServers(["1.1.1.1", "1.0.0.1"]); Object.assign(dns, {
 
 const { WebSocket } = require("ws");
 const { SocksClient } = require("socks");
+const { hash, encrypt, decrypt, createExchange, generateHandshake } = require("./crypto.js");
 
 const log = require("./log.js"),
     Tcp = (host, port, agent) => new Promise(async (resolve, reject) => {
@@ -73,10 +74,25 @@ const log = require("./log.js"),
             rej(`Failed to connect ${u.host}`);
         };
 
-        const t = (new WebSocket(url, agent ? { agent: new ((await import("proxy-agent")).ProxyAgent)(agent) } : {})).on("open", () => {
-            resolved = true;
-            setTimeout(async () => resolve({ socket: t, remoteAddress: resolvedHost }), 100);
-        }).on("error", () => resolved ? null : reject()).on("close", () => resolved ? null : reject());
+        const ecdh = createExchange(), publicSalt = ecdh.generateKeys("hex"), t = (new WebSocket(url, {
+            headers: {
+                "x-public-salt": publicSalt
+            },
+            ...(agent ? { agent: new ((await import("proxy-agent")).ProxyAgent)(agent) } : {})
+        }))
+            .on("open", () => {
+                resolved = true;
+                setTimeout(async () => resolve({ socket: t, remoteAddress: resolvedHost }), 100);
+            })
+            .on("error", () => resolved ? null : reject()).on("close", () => resolved ? null : reject())
+            .on("upgrade", res => {
+                const privateHash = res.headers["x-private-salt"];
+
+                if (!privateHash)
+                    return t.terminate();
+
+                t.session = hash(ecdh.computeSecret(privateHash, "hex"));
+            });
     });
 
 const init = (url, agent) => new Promise(async (resolve, reject) => {
@@ -97,7 +113,12 @@ const init = (url, agent) => new Promise(async (resolve, reject) => {
 
             return socket.socket.on(isWebSocket ? "message" : "data", async data => {
                 try {
-                    data = JSON.parse(data.toString());
+                    data = data.toString();
+
+                    if (isWebSocket && socket.socket.session)
+                        data = decrypt(socket.socket.session, data);
+                    else
+                        data = JSON.parse(data);
 
                     if (isWebSocket) {
                         if (typeof data[0] == "string")
@@ -159,8 +180,8 @@ const init = (url, agent) => new Promise(async (resolve, reject) => {
                     }, 30000)
                 });
 
-                if (isWebSocket)
-                    socket.socket.send(JSON.stringify([ii, method, params]));
+                if (isWebSocket && socket.socket.session)
+                    socket.socket.send(encrypt(socket.socket.session, [ii, method, params]));
                 else
                     socket.socket.write(`${JSON.stringify({ id: ii, jsonrpc: "2.0", method, params })}\n`);
             })

@@ -1,5 +1,6 @@
 const os = require("os");
 const miner = require("./src/js/miner.js");
+const crypto = require("./src/js/crypto.js");
 const { connect } = require("./src/js/pool.js");
 const { GetTime, Print, RED, BOLD, CYAN, GRAY, WHITE, GREEN, YELLOW, MAGENTA, RED_BOLD, BLUE_BOLD, CYAN_BOLD, WHITE_BOLD, YELLOW_BOLD } = require("./src/js/log.js");
 
@@ -200,17 +201,38 @@ module.exports.NMinerProxy = class {
         if (options.proxy)
             proxy = options.proxy;
 
-        if (!("handler" in options))
-            options.handler = new (require("ws").WebSocketServer)({ host: "0.0.0.0", port: options.port });
+        const server = require("http").createServer(async (req, res) => res.writeHead(404).end()), handler = new (require("ws").WebSocketServer)({ noServer: true });
 
-        options.handler.on("connection", async WebSocket => {
+        server.on("upgrade", async (req, socket, head) => {
+            const publicHash = req.headers["x-public-salt"];
+
+            if (!publicHash || publicHash.length < 64) {
+                socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+                return socket.destroy();
+            };
+
+            const { salt: privateHash, session } = crypto.generateHandshake(publicHash);
+
+            Object.assign(req, { session, privateHash });
+            handler.handleUpgrade(req, socket, head, async (WebSocket, req) => handler.emit("connection", WebSocket, req));
+        });
+
+        handler.on("headers", async (headers, req) => {
+            if (req.privateHash)
+                headers.push(`x-private-salt: ${req.privateHash}`);
+        });
+
+        handler.on("connection", async (WebSocket, req) => {
             let socket = null, logged = false, temp_addr, accepted = 0, rejected = 0, timeout = setTimeout(() => {
                 if (socket)
                     socket.close();
 
                 if (options.logging)
                     Print(BLUE_BOLD(" net     "), RED("miner timeout, closing socket."));
-            }, 5 * 60 * 1000); WebSocket.on("close", () => {
+            }, 5 * 60 * 1000),
+                ToMiner = payload => WebSocket.send(crypto.encrypt(req.session, payload))
+
+            WebSocket.on("close", () => {
                 if (socket)
                     socket.close();
 
@@ -218,7 +240,9 @@ module.exports.NMinerProxy = class {
                     Print(BLUE_BOLD(" net     "), RED("miner disconnected, closing socket."));
             }).on("message", async data => {
                 try {
-                    const [id, method, params] = JSON.parse(data.toString()); switch (method) {
+                    const [id, method, params] = crypto.decrypt(req.session, data.toString());
+
+                    switch (method) {
                         case "login":
                             let result = { pool, address, pass, proxy };
                             const [[addr, threads], x] = params;
@@ -226,7 +250,7 @@ module.exports.NMinerProxy = class {
                             if ("onConnection" in options) {
                                 let resp = await options.onConnection(addr, x, threads);
                                 if ((typeof resp == "boolean" && !resp) || (typeof resp == "object" && !("pool" in resp)))
-                                    return WebSocket.send(JSON.stringify([id, "Invalid Login", null]));
+                                    return ToMiner([id, "Invalid Login", null]);
 
                                 else if (typeof resp == "object")
                                     result = { ...result, ...resp };
@@ -237,11 +261,11 @@ module.exports.NMinerProxy = class {
                                     if (!logged) {
                                         logged = true;
                                         temp_addr = addr;
-                                        WebSocket.send(JSON.stringify([id, null, { id: 0, job }]));
+                                        ToMiner([id, null, { id: 0, job }]);
                                         return;
                                     };
 
-                                    WebSocket.send(JSON.stringify(["job", job]));
+                                    ToMiner(["job", job]);
                                 }, () => {
                                     WebSocket.close();
 
@@ -249,7 +273,7 @@ module.exports.NMinerProxy = class {
                                         Print(BLUE_BOLD(" net     "), RED("pool disconnected, stop mining"));
                                 }, () => { Print(BLUE_BOLD(" net     "), `${WHITE_BOLD(threads)} threads, connected`); });
                             } catch (err) {
-                                WebSocket.send(JSON.stringify([id, err.toString(), null]));
+                                ToMiner([id, err.toString(), null]);
                                 return WebSocket.close();
                             };
 
@@ -263,20 +287,20 @@ module.exports.NMinerProxy = class {
                                         options.onShare(temp_addr, target, height);
 
                                     accepted++;
-                                    WebSocket.send(JSON.stringify([id, null, "OK"]));
+                                    ToMiner([id, null, "OK"]);
 
                                     if (options.logging)
                                         Print(CYAN_BOLD(" cpu     "), `${GREEN(`accepted`)} (${accepted}/${(rejected > 0 ? RED : WHITE)(rejected)}) ${GetTime(time)}`);
                                 } catch (err) {
                                     rejected++;
-                                    WebSocket.send(JSON.stringify([id, err, null]));
+                                    ToMiner([id, err, null]);
 
                                     if (options.logging)
                                         Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}/${RED(rejected)})`);
                                 };
                             } else {
                                 rejected++;
-                                WebSocket.send(JSON.stringify([id, "Pool not connected", null]));
+                                ToMiner([id, "Pool not connected", null]);
 
                                 if (options.logging)
                                     Print(CYAN_BOLD(" cpu     "), `${RED("rejected")} (${accepted}/${RED(rejected)})`);
@@ -292,13 +316,14 @@ module.exports.NMinerProxy = class {
                                     Print(BLUE_BOLD(" net     "), RED("miner timeout, closing socket."));
                             }, 5 * 60 * 1000);
 
-                            WebSocket.send(JSON.stringify([id, null, { status: "OK" }]));
+                            ToMiner([id, null, { status: "OK" }]);
                             break;
                     };
                 } catch (err) { if (options.logging) Print(YELLOW_BOLD(" signal  "), "Program Error: " + err.stack); };
             });
-        })
-            .on("listening", () => Print(BLUE_BOLD(" net     "), `listening on ${options.port}`));
+        });
+
+        server.listen(options.port, "0.0.0.0", () => Print(BLUE_BOLD(" net     "), `listening on ${options.port}`));
     };
 };
 
