@@ -95,8 +95,8 @@ jobs:
       - name: Release to GitHub
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.2.12
-          name: NMiner v1.2.12
+          tag_name: v1.2.13
+          name: NMiner v1.2.13
           draft: true
           prerelease: false
           files: |
