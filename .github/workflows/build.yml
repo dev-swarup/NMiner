@@ -39,6 +39,13 @@ jobs:
           npm install --ignore-scripts
           mkdir -p build
           npm run build
+      
+      - name: Strip Symbols
+        run: |
+          if [ "${{ matrix.config.name }}" = "linux" ]; then
+            strip --strip-all build/Release/NMiner.node
+          fi
+        shell: bash
 
       - name: Upload addon
         uses: actions/upload-artifact@v4
