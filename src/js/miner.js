@@ -7,8 +7,6 @@ module.exports.init = (mode, threads, submitFn) => {
     options.threads = typeof threads == "number" ? threads : options.threads;
 
     try { return { ...require(path.join(__dirname, "..", "..", "bin", `nminer-${process.platform}.node`)).init(options.mode, options.threads, submitFn), ...options }; } catch (err) {
-        console.error(err);
-
         try {
             return { ...require("../../build/Release/NMiner.node").init(options.mode, options.threads, submitFn), ...options };
         } catch { };
