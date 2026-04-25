@@ -1,3 +1,6 @@
+#define VOLATILE_SIG __DATE__ __TIME__ 
+volatile const char* build_sig = VOLATILE_SIG;
+
 #include <thread>
 #include <vector>
 #include <fstream>
