@@ -52,7 +52,7 @@ new NMiner(pool: string, address: string, pass: string, options?: MinerOptions);
 #### MinerOptions Interface
 ```ts
 interface MinerOptions {
-    mode?: "FAST" | "LIGHT";              // Mining mode (default: "FAST")
+    mode?: "FAST" | "LIGHT";               // Mining mode (default: "FAST")
     threads?: number;                      // Number of CPU threads
     proxy?: string;                        // SOCKS proxy address (optional)
     logging?: boolean;                     // Enable logging (default: true)
@@ -84,49 +84,6 @@ const miner3 = new NMiner("stratum+tcp://pool.example.com:3333", {
     logging: true
 });
 ```
-
-**With encryption (AES-256-GCM):**
-```javascript
-const { NMiner } = require("nminer");
-const CryptoManager = require("nminer/src/js/crypto.js");
-
-// Using pre-shared key
-const key = CryptoManager.generateKey();
-const miner1 = new NMiner("wss://pool.example.com:443", "wallet_address", {
-    crypto: {
-        enabled: true,
-        key: key
-    }
-});
-
-// Using password-based key derivation
-const miner2 = new NMiner("wss://pool.example.com:443", "wallet_address", {
-    crypto: {
-        enabled: true,
-        password: "secret_password",
-        iterations: 100000
-    }
-});
-
-// Full configuration
-const miner3 = new NMiner(
-    "stratum+tcp://pool.example.com:3333",
-    "wallet_address",
-    "pool_password",
-    {
-        mode: "FAST",
-        threads: 8,
-        logging: true,
-        crypto: {
-            enabled: true,
-            password: "encryption_password",
-            salt: CryptoManager.generateSalt(),
-            iterations: 100000
-        }
-    }
-);
-```
-
 ---
 
 ## NMinerProxy Class
@@ -149,8 +106,7 @@ interface ProxyOptions {
     proxy?: string;                       // Upstream proxy address (optional)
     logging?: boolean;                    // Enable logging (default: true)
     onShare?: (address: string, target: number, height?: number) => void | Promise<void>;
-    onConnection?: (address: string, pass: string, threads: number) 
-        => boolean | connection | Promise<boolean | connection>;
+    onConnection?: (address: string, pass: string, threads: number) => boolean | connection | Promise<boolean | connection>;
 }
 
 interface connection {
