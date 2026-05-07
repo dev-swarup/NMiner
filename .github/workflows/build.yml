@@ -32,7 +32,7 @@ jobs:
 
       - if: matrix.config.name == 'win32'
         name: Install Windows dependencies
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
       
       - name: Install & Build
         run: |
