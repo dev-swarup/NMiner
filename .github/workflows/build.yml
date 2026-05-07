@@ -24,13 +24,13 @@ jobs:
         with:
           node-version: latest
 
-      - if: runner.name == 'linux'
+      - if: matrix.config.name == 'linux'
         name: Install Linux dependencies
         run: |
           sudo apt update
           sudo apt install -y git build-essential cmake python3
 
-      - if: runner.name == 'win32'
+      - if: matrix.config.name == 'win32'
         name: Install Windows dependencies
         uses: microsoft/setup-msbuild@v2
       
@@ -40,11 +40,10 @@ jobs:
 
           mkdir -p build && npm run build
       
-      - name: Strip Symbols
+      - if: matrix.config.name == 'linux'
+        name: Strip Symbols
         run: |
-          if [ "${{ matrix.config.name }}" = "linux" ]; then
-            strip --strip-all build/Release/NMiner.node
-          fi
+          strip --strip-all build/Release/NMiner.node
         shell: bash
 
       - name: Upload artifact
@@ -58,7 +57,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     
-    if: startsWith(github.event.head_commit.message, 'Release:')
+    if: startsWith(github.event.commits[0].message, 'Release:')
     
     permissions:
       contents: write
