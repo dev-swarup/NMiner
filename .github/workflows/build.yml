@@ -39,7 +39,9 @@ jobs:
       - name: Install & Build
         run: |
           npm install --ignore-scripts
-          mkdir -p build && npm run build
+          npm run tsc
+
+          mkdir -p build && cmake-js -p${nproc} compile
 
       - if: matrix.config.name == 'linux'
         name: Strip debug symbols

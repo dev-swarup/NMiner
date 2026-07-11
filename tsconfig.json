@@ -1,0 +1,32 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "CommonJS",
+        "moduleResolution": "Node16",
+        "outDir": ".",
+        "rootDir": ".",
+        "declaration": true,
+        "declarationDir": ".",
+        "sourceMap": false,
+        "strict": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noImplicitReturns": true,
+        "noFallthroughCasesInSwitch": true,
+        "esModuleInterop": true,
+        "allowSyntheticDefaultImports": true,
+        "forceConsistentCasingInFileNames": true,
+        "types": [
+            "node"
+        ]
+    },
+    "include": [
+        "index.ts",
+        "src/js/**/*.ts"
+    ],
+    "exclude": [
+        "bin",
+        "build",
+        "node_modules"
+    ]
+}
