@@ -6,97 +6,103 @@ on:
 
 jobs:
   build:
-    timeout-minutes: 15
+    timeout-minutes: 20
     runs-on: ${{ matrix.config.os }}
 
     strategy:
       matrix:
         config:
-          - { os: ubuntu-22.04, name: linux }
-          - { os: windows-latest, name: win32 }
+          - { os: ubuntu-22.04, name: linux,  node: 22 }
+          - { os: ubuntu-24.04, name: linux,  node: 24 }
+          - { os: windows-latest, name: win32, node: 22 }
+      fail-fast: false
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: Install Node.js
-        uses: actions/setup-node@v6
+      - name: Install Node.js ${{ matrix.config.node }}
+        uses: actions/setup-node@v4
         with:
-          node-version: latest
+          node-version: ${{ matrix.config.node }}
 
       - if: matrix.config.name == 'linux'
         name: Install Linux dependencies
         run: |
-          sudo apt update
-          sudo apt install -y git build-essential cmake python3
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git build-essential cmake python3
 
       - if: matrix.config.name == 'win32'
         name: Install Windows dependencies
-        uses: microsoft/setup-msbuild@v3
-      
+        uses: microsoft/setup-msbuild@v2
+
       - name: Install & Build
         run: |
           npm install --ignore-scripts
-
           mkdir -p build && npm run build
-      
+
       - if: matrix.config.name == 'linux'
-        name: Strip Symbols
+        name: Strip debug symbols
         run: |
           strip --strip-all build/Release/NMiner.node
         shell: bash
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
-          name: addon-${{ matrix.config.name }}
+          name: addon-${{ matrix.config.name }}-node${{ matrix.config.node }}
           path: build/Release/NMiner.node
 
   publish:
     name: Publish & Release
     needs: build
-    runs-on: ubuntu-latest
-    
+    runs-on: ubuntu-22.04
+
     if: startsWith(github.event.commits[0].message, 'Release:')
-    
+
     permissions:
       contents: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: latest
+          node-version: 22
           registry-url: https://registry.npmjs.org
+
+      - id: pkg
+        name: Read version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Download all binaries
         uses: actions/download-artifact@v4
         with:
           path: ./temp
-        
+
       - name: Prepare Package
         run: |
           mkdir -p bin
-          
-          cp temp/addon-win32/NMiner.node ./bin/nminer-win32.node
-          cp temp/addon-linux/NMiner.node ./bin/nminer-linux.node
-          
+
+          cp temp/addon-win32-node22/NMiner.node ./bin/nminer-win32.node
+          cp temp/addon-linux-node22/NMiner.node ./bin/nminer-linux-node22.node
+          cp temp/addon-linux-node24/NMiner.node ./bin/nminer-linux-node24.node
+
           zip -r nminer-win32.zip bin/nminer-win32.node src/js/*.js index.js index.d.ts package.json LICENSE
-          tar -czvf nminer-linux.tar.gz bin/nminer-linux.node src/js/*.js index.js index.d.ts package.json LICENSE
+          tar -czvf nminer-linux.tar.gz bin/nminer-linux-node*.node src/js/*.js index.js index.d.ts package.json LICENSE
 
       - name: Publish to NPM
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      
+
       - name: Release to GitHub
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.2.13
-          name: NMiner v1.2.13
+          tag_name: v${{ steps.pkg.outputs.version }}
+          name: NMiner v${{ steps.pkg.outputs.version }}
           draft: true
           prerelease: false
           files: |

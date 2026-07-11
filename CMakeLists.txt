@@ -1,7 +1,16 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.13)
 project(NMiner)
 
-set(CMAKE_CXX_STANDARD 20)
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-std=c++20" COMPILER_SUPPORTS_CXX20)
+
+if(COMPILER_SUPPORTS_CXX20)
+    set(CMAKE_CXX_STANDARD 20)
+else()
+    set(CMAKE_CXX_STANDARD 17)
+endif()
+
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -53,7 +62,6 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 include(CheckCCompilerFlag)
-include(CheckCXXCompilerFlag)
 
 function(add_flag flag)
     string(REPLACE "-" "_" supported_cxx ${flag}_cxx)
@@ -316,9 +324,22 @@ include_directories("${CMAKE_CURRENT_SOURCE_DIR}/node_modules/node-api-headers/i
 if(MSVC)
     add_compile_options(/wd4005)
     add_compile_definitions(_HAS_EXCEPTIONS=1)
+
+    if(CMAKE_BUILD_TYPE STREQUAL "Release" OR NOT CMAKE_BUILD_TYPE)
+        add_link_options(/LTCG)
+        add_compile_options(/O2 /Oi /Ot /GL)
+    endif()
+else()
+    if(CMAKE_BUILD_TYPE STREQUAL "Release" OR NOT CMAKE_BUILD_TYPE)
+        add_flag("-O3")
+        add_flag("-flto")
+        add_flag("-funroll-loops")
+        add_flag("-fno-exceptions")
+    endif()
 endif()
 
 add_library(${CMAKE_PROJECT_NAME} SHARED ${SOURCES} ${CMAKE_JS_SRC})
 target_link_libraries(${CMAKE_PROJECT_NAME} ${CMAKE_JS_LIB})
 
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES PREFIX "" SUFFIX ".node")
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NAPI_DISABLE_CPP_EXCEPTIONS)

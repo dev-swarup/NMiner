@@ -21,7 +21,7 @@
         "@types/node": "^25.4.0"
     },
     "engines": {
-        "node": ">=18.0.0"
+        "node": ">=22.0.0"
     },
     "repository": {
         "type": "git",
@@ -34,10 +34,10 @@
     },
     "homepage": "https://github.com/dev-swarup/NMiner#readme",
     "files": [
-        "index.js",
-        "index.d.ts",
         "LICENSE",
+        "index.js",
         "bin/*.node",
+        "index.d.ts",
         "src/js/*.js"
     ]
 }
