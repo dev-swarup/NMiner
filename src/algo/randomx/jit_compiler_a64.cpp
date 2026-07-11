@@ -639,7 +639,16 @@ void JitCompilerA64::h_ISUB_R(Instruction& instr, uint32_t& codePos)
 	}
 	else
 	{
-		emitAddImmediate(dst, dst, -instr.getImm32(), code, k);
+		const uint32_t imm = instr.getImm32();
+
+		if (imm == 0x80000000ul) {
+			constexpr uint32_t tmp_reg = 20;
+			emit32(ARMV8A::MOVZ | tmp_reg | (1u << 21) | (0x8000u << 5), code, k);
+			emit32(ARMV8A::ADD | dst | (dst << 5) | (tmp_reg << 16), code, k);
+		}
+		else {
+			emitAddImmediate(dst, dst, -instr.getImm32(), code, k);
+		}
 	}
 
 	reg_changed_offset[instr.dst] = k;
@@ -1001,11 +1010,8 @@ void JitCompilerA64::h_FDIV_M(Instruction& instr, uint32_t& codePos)
 	constexpr uint32_t tmp_reg_fp = 28;
 	emitMemLoadFP<tmp_reg_fp>(src, instr, code, k);
 
-	// and tmp_reg_fp, tmp_reg_fp, and_mask_reg
-	emit32(0x4E201C00 | tmp_reg_fp | (tmp_reg_fp << 5) | (29 << 16), code, k);
-
-	// orr tmp_reg_fp, tmp_reg_fp, or_mask_reg
-	emit32(0x4EA01C00 | tmp_reg_fp | (tmp_reg_fp << 5) | (30 << 16), code, k);
+	// bif tmp_reg_fp, or_mask_reg, and_mask_reg
+	emit32(0x6EE01C00 | tmp_reg_fp | (30 << 5) | (29 << 16), code, k);
 
 	emit32(ARMV8A::FDIV | dst | (dst << 5) | (tmp_reg_fp << 16), code, k);
 
