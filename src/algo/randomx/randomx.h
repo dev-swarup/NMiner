@@ -29,8 +29,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef RANDOMX_H
 #define RANDOMX_H
 
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
+#include <type_traits>
+#include "intrin_portable.h"
 
 #define RANDOMX_HASH_SIZE 32
 #define RANDOMX_DATASET_ITEM_SIZE 64
@@ -39,55 +41,138 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define RANDOMX_EXPORT
 #endif
 
-typedef enum {
+
+enum randomx_flags {
   RANDOMX_FLAG_DEFAULT = 0,
   RANDOMX_FLAG_LARGE_PAGES = 1,
   RANDOMX_FLAG_HARD_AES = 2,
   RANDOMX_FLAG_FULL_MEM = 4,
   RANDOMX_FLAG_JIT = 8,
-  RANDOMX_FLAG_SECURE = 16,
-  RANDOMX_FLAG_ARGON2_SSSE3 = 32,
-  RANDOMX_FLAG_ARGON2_AVX2 = 64,
-  RANDOMX_FLAG_ARGON2 = 96,
-  RANDOMX_FLAG_V2 = 128,
-} randomx_flags;
+  RANDOMX_FLAG_1GB_PAGES = 16,
+  RANDOMX_FLAG_AMD = 64,
+};
 
-typedef struct randomx_dataset randomx_dataset;
-typedef struct randomx_cache randomx_cache;
-typedef struct randomx_vm randomx_vm;
 
+struct randomx_dataset;
+struct randomx_cache;
+class randomx_vm;
+
+
+struct RandomX_ConfigurationBase
+{
+	RandomX_ConfigurationBase();
+
+	void Apply();
+
+	// Common parameters for all RandomX variants
+	enum Params : uint64_t
+	{
+		ArgonMemory = 262144,
+		CacheAccesses = 8,
+		SuperscalarMaxLatency = 170,
+		DatasetBaseSize = 2147483648,
+		DatasetExtraSize = 33554368,
+		JumpBits = 8,
+		JumpOffset = 8,
+		CacheLineAlignMask_Calculated = (DatasetBaseSize - 1) & ~(RANDOMX_DATASET_ITEM_SIZE - 1),
+		DatasetExtraItems_Calculated = DatasetExtraSize / RANDOMX_DATASET_ITEM_SIZE,
+		ConditionMask_Calculated = ((1 << JumpBits) - 1) << JumpOffset,
+	};
+
+	uint32_t ArgonIterations;
+	uint32_t ArgonLanes;
+	const char* ArgonSalt;
+	uint32_t SuperscalarLatency;
+
+	uint32_t ScratchpadL1_Size;
+	uint32_t ScratchpadL2_Size;
+	uint32_t ScratchpadL3_Size;
+
+	uint32_t ProgramSize;
+	uint32_t ProgramIterations;
+	uint32_t ProgramCount;
+
+	uint32_t RANDOMX_FREQ_IADD_RS;
+	uint32_t RANDOMX_FREQ_IADD_M;
+	uint32_t RANDOMX_FREQ_ISUB_R;
+	uint32_t RANDOMX_FREQ_ISUB_M;
+	uint32_t RANDOMX_FREQ_IMUL_R;
+	uint32_t RANDOMX_FREQ_IMUL_M;
+	uint32_t RANDOMX_FREQ_IMULH_R;
+	uint32_t RANDOMX_FREQ_IMULH_M;
+	uint32_t RANDOMX_FREQ_ISMULH_R;
+	uint32_t RANDOMX_FREQ_ISMULH_M;
+	uint32_t RANDOMX_FREQ_IMUL_RCP;
+	uint32_t RANDOMX_FREQ_INEG_R;
+	uint32_t RANDOMX_FREQ_IXOR_R;
+	uint32_t RANDOMX_FREQ_IXOR_M;
+	uint32_t RANDOMX_FREQ_IROR_R;
+	uint32_t RANDOMX_FREQ_IROL_R;
+	uint32_t RANDOMX_FREQ_ISWAP_R;
+	uint32_t RANDOMX_FREQ_FSWAP_R;
+	uint32_t RANDOMX_FREQ_FADD_R;
+	uint32_t RANDOMX_FREQ_FADD_M;
+	uint32_t RANDOMX_FREQ_FSUB_R;
+	uint32_t RANDOMX_FREQ_FSUB_M;
+	uint32_t RANDOMX_FREQ_FSCAL_R;
+	uint32_t RANDOMX_FREQ_FMUL_R;
+	uint32_t RANDOMX_FREQ_FDIV_M;
+	uint32_t RANDOMX_FREQ_FSQRT_R;
+	uint32_t RANDOMX_FREQ_CBRANCH;
+	uint32_t RANDOMX_FREQ_CFROUND;
+	uint32_t RANDOMX_FREQ_ISTORE;
+	uint32_t RANDOMX_FREQ_NOP;
+
+	rx_vec_i128 fillAes4Rx4_Key[8];
+
+	uint32_t Tweak_V2_CFROUND : 1;
+	uint32_t Tweak_V2_AES : 1;
+	uint32_t Tweak_V2_PREFETCH : 1;
+	uint32_t Tweak_V2_COMMITMENT : 1;
+
+	uint8_t codeSshPrefetchTweaked[20];
+	uint8_t codePrefetchScratchpadTweaked[28];
+	uint32_t codePrefetchScratchpadTweakedSize;
+
+	uint32_t AddressMask_Calculated[4];
+	uint32_t ScratchpadL3Mask_Calculated;
+	uint32_t ScratchpadL3Mask64_Calculated;
+};
+
+struct RandomX_ConfigurationMonero : public RandomX_ConfigurationBase {};
+struct RandomX_ConfigurationMoneroV2 : public RandomX_ConfigurationBase { RandomX_ConfigurationMoneroV2(); };
+struct RandomX_ConfigurationWownero : public RandomX_ConfigurationBase { RandomX_ConfigurationWownero(); };
+struct RandomX_ConfigurationArqma : public RandomX_ConfigurationBase { RandomX_ConfigurationArqma(); };
+struct RandomX_ConfigurationGraft : public RandomX_ConfigurationBase { RandomX_ConfigurationGraft(); };
+struct RandomX_ConfigurationSafex : public RandomX_ConfigurationBase { RandomX_ConfigurationSafex(); };
+struct RandomX_ConfigurationYada : public RandomX_ConfigurationBase { RandomX_ConfigurationYada(); };
+
+extern RandomX_ConfigurationMonero RandomX_MoneroConfig;
+extern RandomX_ConfigurationMoneroV2 RandomX_MoneroConfigV2;
+extern RandomX_ConfigurationWownero RandomX_WowneroConfig;
+extern RandomX_ConfigurationArqma RandomX_ArqmaConfig;
+extern RandomX_ConfigurationGraft RandomX_GraftConfig;
+extern RandomX_ConfigurationSafex RandomX_SafexConfig;
+extern RandomX_ConfigurationYada RandomX_YadaConfig;
+
+extern RandomX_ConfigurationBase RandomX_CurrentConfig;
+
+template<typename T>
+void randomx_apply_config(const T& config)
+{
+	static_assert(sizeof(T) == sizeof(RandomX_ConfigurationBase), "Invalid RandomX configuration struct size");
+	static_assert(std::is_base_of<RandomX_ConfigurationBase, T>::value, "Incompatible RandomX configuration struct");
+	RandomX_CurrentConfig = config;
+	RandomX_CurrentConfig.Apply();
+}
+
+void randomx_set_scratchpad_prefetch_mode(int mode);
+void randomx_set_huge_pages_jit(bool hugePages);
+void randomx_set_optimized_dataset_init(int value);
 
 #if defined(__cplusplus)
-
-#ifdef __cpp_constexpr
-#define CONSTEXPR constexpr
-#else
-#define CONSTEXPR
-#endif
-
-inline CONSTEXPR randomx_flags operator |(randomx_flags a, randomx_flags b) {
-	return static_cast<randomx_flags>(static_cast<int>(a) | static_cast<int>(b));
-}
-inline CONSTEXPR randomx_flags operator &(randomx_flags a, randomx_flags b) {
-	return static_cast<randomx_flags>(static_cast<int>(a) & static_cast<int>(b));
-}
-inline randomx_flags& operator |=(randomx_flags& a, randomx_flags b) {
-	return a = a | b;
-}
-
 extern "C" {
 #endif
-
-/**
- * @return The recommended flags to be used on the current machine.
- *         Does not include:
- *            RANDOMX_FLAG_LARGE_PAGES
- *            RANDOMX_FLAG_FULL_MEM
- *            RANDOMX_FLAG_SECURE
- *         These flags must be added manually if desired.
- *         On OpenBSD RANDOMX_FLAG_SECURE is enabled by default in JIT mode as W^X is enforced by the OS.
- */
-RANDOMX_EXPORT randomx_flags randomx_get_flags(void);
 
 /**
  * Creates a randomx_cache structure and allocates memory for RandomX Cache.
@@ -96,19 +181,12 @@ RANDOMX_EXPORT randomx_flags randomx_get_flags(void);
  *        RANDOMX_FLAG_LARGE_PAGES - allocate memory in large pages
  *        RANDOMX_FLAG_JIT - create cache structure with JIT compilation support; this makes
  *                           subsequent Dataset initialization faster
- *        Optionally, one of these two flags may be selected:
- *        RANDOMX_FLAG_ARGON2_SSSE3 - optimized Argon2 for CPUs with the SSSE3 instruction set
- *                                   makes subsequent cache initialization faster
- *        RANDOMX_FLAG_ARGON2_AVX2 - optimized Argon2 for CPUs with the AVX2 instruction set
- *                                   makes subsequent cache initialization faster
  *
  * @return Pointer to an allocated randomx_cache structure.
- *         Returns NULL if:
- *         (1) memory allocation fails
- *         (2) the RANDOMX_FLAG_JIT is set and JIT compilation is not supported on the current platform
- *         (3) an invalid or unsupported RANDOMX_FLAG_ARGON2 value is set
+ *         NULL is returned if memory allocation fails or if the RANDOMX_FLAG_JIT
+ *         is set and JIT compilation is not supported on the current platform.
  */
-RANDOMX_EXPORT randomx_cache *randomx_alloc_cache(randomx_flags flags);
+RANDOMX_EXPORT randomx_cache *randomx_create_cache(randomx_flags flags, uint8_t *memory);
 
 /**
  * Initializes the cache memory and SuperscalarHash using the provided key value.
@@ -188,14 +266,12 @@ RANDOMX_EXPORT void randomx_release_dataset(randomx_dataset *dataset);
 /**
  * Creates and initializes a RandomX virtual machine.
  *
- * @param flags is any combination of these 5 flags (each flag can be set or not set):
+ * @param flags is any combination of these 4 flags (each flag can be set or not set):
  *        RANDOMX_FLAG_LARGE_PAGES - allocate scratchpad memory in large pages
  *        RANDOMX_FLAG_HARD_AES - virtual machine will use hardware accelerated AES
  *        RANDOMX_FLAG_FULL_MEM - virtual machine will use the full dataset
  *        RANDOMX_FLAG_JIT - virtual machine will use a JIT compiler
- *        RANDOMX_FLAG_SECURE - when combined with RANDOMX_FLAG_JIT, the JIT pages are never
- *                              writable and executable at the same time (W^X policy)
- *        The numeric values of the first 4 flags are ordered so that a higher value will provide
+ *        The numeric values of the flags are ordered so that a higher value will provide
  *        faster hash calculation and a lower numeric value will provide higher portability.
  *        Using RANDOMX_FLAG_DEFAULT (all flags not set) works on all platforms, but is the slowest.
  * @param cache is a pointer to an initialized randomx_cache structure. Can be
@@ -210,7 +286,7 @@ RANDOMX_EXPORT void randomx_release_dataset(randomx_dataset *dataset);
  *         (3) cache parameter is NULL and RANDOMX_FLAG_FULL_MEM is not set
  *         (4) dataset parameter is NULL and RANDOMX_FLAG_FULL_MEM is set
 */
-RANDOMX_EXPORT randomx_vm *randomx_create_vm(randomx_flags flags, randomx_cache *cache, randomx_dataset *dataset);
+RANDOMX_EXPORT randomx_vm *randomx_create_vm(randomx_flags flags, randomx_cache *cache, randomx_dataset *dataset, uint8_t *scratchpad, uint32_t node);
 
 /**
  * Reinitializes a virtual machine with a new Cache. This function should be called anytime

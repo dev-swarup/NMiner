@@ -46,34 +46,45 @@ namespace randomx {
 
 	class JitCompilerA64 {
 	public:
-		JitCompilerA64();
+		explicit JitCompilerA64(bool hugePagesEnable, bool optimizedInitDatasetEnable);
 		~JitCompilerA64();
 
-		void generateProgram(Program&, ProgramConfiguration&);
+		void prepare() {}
+		void generateProgram(Program&, ProgramConfiguration&, uint32_t);
 		void generateProgramLight(Program&, ProgramConfiguration&, uint32_t);
 
-		void generateSuperscalarHash(SuperscalarProgramList &programs, std::vector<uint64_t> &);
+		template<size_t N>
+		void generateSuperscalarHash(SuperscalarProgram(&programs)[N]);
 
 		void generateDatasetInitCode() {}
 
-		ProgramFunc* getProgramFunc() { return reinterpret_cast<ProgramFunc*>(code); }
-		DatasetInitFunc* getDatasetInitFunc();
+		inline ProgramFunc *getProgramFunc() const {
+#			ifdef RANDOMX_CUSTOM_SECURE_JIT
+			enableExecution();
+#			endif
+
+			return reinterpret_cast<ProgramFunc*>(code);
+		}
+
+		DatasetInitFunc* getDatasetInitFunc() const;
 		uint8_t* getCode() { return code; }
 		size_t getCodeSize();
 
-		void enableWriting();
-		void enableExecution();
-		void enableAll();
+		void enableWriting() const;
+		void enableExecution() const;
 
-		void setFlags(randomx_flags f) { flags = f; }
-	private:
 		static InstructionGeneratorA64 engine[256];
-		uint32_t reg_changed_offset[8];
-		uint8_t* code;
-		uint32_t literalPos;
-		uint32_t num32bitLiterals;
 
-		randomx_flags flags;
+	private:
+		const bool hugePages;
+		uint32_t reg_changed_offset[8]{};
+		uint8_t* code = nullptr;
+		uint32_t literalPos;
+		uint32_t num32bitLiterals = 0;
+		size_t allocatedSize = 0;
+		uint32_t vm_flags = 0;
+
+		void allocate(size_t size);
 
 		static void emit32(uint32_t val, uint8_t* code, uint32_t& codePos)
 		{
@@ -83,7 +94,7 @@ namespace randomx {
 
 		static void emit64(uint64_t val, uint8_t* code, uint32_t& codePos)
 		{
-			memcpy(code + codePos, &val, sizeof(val));
+			*(uint64_t*)(code + codePos) = val;
 			codePos += sizeof(val);
 		}
 
@@ -96,6 +107,7 @@ namespace randomx {
 		template<uint32_t tmp_reg_fp>
 		void emitMemLoadFP(uint32_t src, Instruction& instr, uint8_t* code, uint32_t& codePos);
 
+	public:
 		void h_IADD_RS(Instruction&, uint32_t&);
 		void h_IADD_M(Instruction&, uint32_t&);
 		void h_ISUB_R(Instruction&, uint32_t&);

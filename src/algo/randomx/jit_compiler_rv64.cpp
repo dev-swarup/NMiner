@@ -32,20 +32,36 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <cassert>
 #include "jit_compiler_rv64.hpp"
 #include "jit_compiler_rv64_static.hpp"
+#include "jit_compiler_rv64_vector.h"
+#include "jit_compiler_rv64_vector_static.h"
 #include "superscalar.hpp"
 #include "program.hpp"
 #include "reciprocal.h"
-#include "virtual_memory.h"
-#include "cpu.hpp"
-#include "jit_compiler_rv64_vector_static.h"
-#include "jit_compiler_rv64_vector.h"
+#include "virtual_memory.hpp"
 #include "soft_aes.h"
 
-namespace {
-#define HANDLER_ARGS randomx::CompilerState& state, randomx::Instruction isn, int i, randomx_flags flags
-	using InstructionHandler = void(HANDLER_ARGS);
-	extern InstructionHandler* opcodeMap1[256];
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
+
+static bool hugePagesJIT = false;
+static int optimizedDatasetInit = -1;
+
+void randomx_set_huge_pages_jit(bool hugePages)
+{
+	hugePagesJIT = hugePages;
 }
+
+void randomx_set_optimized_dataset_init(int value)
+{
+	optimizedDatasetInit = value;
+}
+
+#define alignSize(pos, align) (((pos - 1) / align + 1) * align)
+
 
 namespace rv64 {
 	constexpr uint16_t C_LUI    =     0x6001;
@@ -106,34 +122,27 @@ namespace randomx {
 	constexpr size_t SuperscalarProgramHeader = 136;   //overhead per superscalar program
 	constexpr size_t CodeAlign = 4096;                 //align code size to a multiple of 4 KiB
 	constexpr size_t LiteralPoolSize = CodeAlign;
-	constexpr size_t SuperscalarLiteraPoolSize = RANDOMX_CACHE_ACCESSES * CodeAlign;
+	constexpr size_t SuperscalarLiteraPoolSize = RANDOMX_CACHE_MAX_ACCESSES * CodeAlign;
 	constexpr size_t ReserveCodeSize = CodeAlign;  //prologue, epilogue + reserve
 
 	constexpr size_t RandomXCodeSize = alignSize(LiteralPoolSize + ReserveCodeSize + MaxRandomXInstrCodeSize * RANDOMX_PROGRAM_MAX_SIZE, CodeAlign);
-	constexpr size_t SuperscalarSize = alignSize(SuperscalarLiteraPoolSize + ReserveCodeSize + (SuperscalarProgramHeader + MaxSuperscalarInstrSize * SuperscalarMaxSize) * RANDOMX_CACHE_ACCESSES, CodeAlign);
-
-	static_assert(RandomXCodeSize < INT32_MAX / 2, "RandomXCodeSize is too large");
-	static_assert(SuperscalarSize < INT32_MAX / 2, "SuperscalarSize is too large");
+	constexpr size_t SuperscalarSize = alignSize(SuperscalarLiteraPoolSize + ReserveCodeSize + (SuperscalarProgramHeader + MaxSuperscalarInstrSize * SuperscalarMaxSize) * RANDOMX_CACHE_MAX_ACCESSES, CodeAlign);
 
 	constexpr uint32_t CodeSize = RandomXCodeSize + SuperscalarSize;
 	constexpr uint32_t ExecutableSize = CodeSize - LiteralPoolSize;
 
 	constexpr int32_t LiteralPoolOffset = LiteralPoolSize / 2;
 	constexpr int32_t SuperScalarLiteralPoolOffset = RandomXCodeSize;
-	constexpr int32_t SuperScalarLiteralPoolRefOffset = RandomXCodeSize + (RANDOMX_CACHE_ACCESSES - 1) * LiteralPoolSize + LiteralPoolOffset;
+	constexpr int32_t SuperScalarLiteralPoolRefOffset = RandomXCodeSize + (RANDOMX_CACHE_MAX_ACCESSES - 1) * LiteralPoolSize + LiteralPoolOffset;
 	constexpr int32_t SuperScalarHashOffset = SuperScalarLiteralPoolOffset + SuperscalarLiteraPoolSize;
-
-	constexpr int maskLog2(uint32_t x, int prev) {
-		return x == 1 ? prev : maskLog2(x >> 1, prev + 1);
-	}
 
 	constexpr int32_t unsigned32ToSigned2sCompl(uint32_t x) {
 		return (-1 == ~0) ? (int32_t)x : (x > INT32_MAX ? (-(int32_t)(UINT32_MAX - x) - 1) : (int32_t)x);
 	}
 
-	constexpr int MaskL1Shift = 32 - maskLog2(RANDOMX_SCRATCHPAD_L1, 0);
-	constexpr int MaskL2Shift = 32 - maskLog2(RANDOMX_SCRATCHPAD_L2, 0);
-	constexpr int MaskL3Shift = 32 - maskLog2(RANDOMX_SCRATCHPAD_L3, 0);
+#define MaskL1Shift (32 - RandomX_CurrentConfig.Log2_ScratchpadL1)
+#define MaskL2Shift (32 - RandomX_CurrentConfig.Log2_ScratchpadL2)
+#define	MaskL3Shift (32 - RandomX_CurrentConfig.Log2_ScratchpadL3)
 
 	constexpr int RcpLiteralsOffset = 144;
 
@@ -440,12 +449,12 @@ namespace randomx {
 		}
 	}
 
-	static void emitRcpLiteral2(CodeBuffer& buf, uint64_t literal, int32_t numLiterals) {
+	static void emitRcpLiteral2(CodeBuffer& buf, uint64_t literal, bool lastLiteral) {
 		//store the current literal in the pool
 		int32_t offset = 2040 - buf.rcpCount * 8;
 		buf.emitAt(SuperScalarLiteralPoolRefOffset + offset, literal);
 		buf.rcpCount++;
-		if (buf.rcpCount >= numLiterals) {
+		if (lastLiteral) {
 			return;
 		}
 		//load the next literal
@@ -472,36 +481,36 @@ namespace randomx {
 		buf.emitAt(codePos, rvi(rv64::JAL, dst + imm1912, 0, imm20 + imm101 + imm11));
 	}
 
-	static void emitInstruction(CompilerState& state, Instruction isn, int i, randomx_flags flags) {
+	static void emitInstruction(CompilerState& state, Instruction isn, int i) {
 		state.instructionOffsets[i] = state.codePos;
-		opcodeMap1[isn.opcode](state, isn, i, flags);
+		(*JitCompilerRV64::engine[isn.opcode])(state, isn, i);
 	}
 
-	static void emitProgramPrefix(CompilerState& state, Program& prog, ProgramConfiguration& pcfg, randomx_flags flags) {
+	static void emitProgramPrefix(CompilerState& state, Program& prog, ProgramConfiguration& pcfg) {
 		state.codePos = RandomXCodePos;
 		state.rcpCount = 0;
 
 		state.emitAt(LiteralPoolOffset + sizeLiterals, pcfg.eMask[0]);
 		state.emitAt(LiteralPoolOffset + sizeLiterals + 8, pcfg.eMask[1]);
 
-		if (flags & RANDOMX_FLAG_V2) {
-			state.emitAt(LiteralPoolOffset + sizeLiterals + 16, (uint64_t) &randomx_aes_lut_enc[2][0]);
-			state.emitAt(LiteralPoolOffset + sizeLiterals + 24, (uint64_t) &randomx_aes_lut_dec[2][0]);
+		if (RandomX_CurrentConfig.Tweak_V2_AES) {
+			state.emitAt(LiteralPoolOffset + sizeLiterals + 16, (uint64_t) &lutEnc[2][0]);
+			state.emitAt(LiteralPoolOffset + sizeLiterals + 24, (uint64_t) &lutDec[2][0]);
 		}
 
 		for (unsigned i = 0; i < RegistersCount; ++i) {
 			state.registerUsage[i] = -1;
 		}
-		for (unsigned i = 0; i < prog.getSize(flags); ++i) {
+		for (unsigned i = 0; i < prog.getSize(); ++i) {
 			Instruction instr = prog(i);
 			instr.src %= RegistersCount;
 			instr.dst %= RegistersCount;
-			emitInstruction(state, instr, i, flags);
+			emitInstruction(state, instr, i);
 		}
 	}
 
-	static void emitProgramSuffix(CompilerState& state, ProgramConfiguration& pcfg, randomx_flags flags) {
-		if (flags & RANDOMX_FLAG_V2) {
+	static void emitProgramSuffix(CompilerState& state, ProgramConfiguration& pcfg) {
+		if (RandomX_CurrentConfig.Tweak_V2_AES) {
 			state.emit(codeSpadStoreSoftAes, sizeSpadStoreSoftAes);
 		}
 		else {
@@ -517,12 +526,12 @@ namespace randomx {
 		emitJump(state, 0, fixPos, LoopTopPos);
 		state.emit(codeEpilogue, sizeEpilogue);
 
-		if (flags & RANDOMX_FLAG_V2) {
+		if (RandomX_CurrentConfig.Tweak_V2_AES) {
 			state.emit(codeSoftAes, sizeSoftAes);
 		}
 	}
 
-	static void generateSuperscalarCode(CodeBuffer& buf, Instruction isn, const std::vector<uint64_t>& reciprocalCache) {
+	static void generateSuperscalarCode(CodeBuffer& buf, Instruction isn, bool lastLiteral) {
 		switch ((SuperscalarInstructionType)isn.opcode)
 		{
 		case randomx::SuperscalarInstructionType::ISUB_R:
@@ -609,7 +618,7 @@ namespace randomx {
 			//mul x{dst}, x{dst}, x31
 			buf.emit(rvi(rv64::MUL, regSS(isn.dst), regSS(isn.dst), SshRcpReg));
 			//load the next literal into x31
-			emitRcpLiteral2(buf, reciprocalCache[isn.getImm32()], reciprocalCache.size());
+			emitRcpLiteral2(buf, randomx_reciprocal(isn.getImm32()), lastLiteral);
 			break;
 		default:
 			UNREACHABLE;
@@ -620,27 +629,33 @@ namespace randomx {
 		return CodeSize;
 	}
 
-	JitCompilerRV64::JitCompilerRV64() {
-		state.code = (uint8_t*)allocMemoryPages(CodeSize);
-		if (state.code == nullptr)
-			throw std::runtime_error("allocMemoryPages");
+	JitCompilerRV64::JitCompilerRV64(bool hugePagesEnable, bool) {
+		state.code = static_cast<uint8_t*>(allocExecutableMemory(CodeSize, hugePagesJIT && hugePagesEnable));
 		state.emitAt(LiteralPoolOffset, codeLiterals, sizeLiterals);
+
+		const uint32_t L1_Mask = RandomX_CurrentConfig.ScratchpadL1_Size - 8;
+		const uint32_t L2_Mask = RandomX_CurrentConfig.ScratchpadL2_Size - 8;
+		const uint32_t L3_Mask = RandomX_CurrentConfig.ScratchpadL3_Size - 64;
+		const uint32_t DatasetBaseSize_Mask = RandomX_CurrentConfig.DatasetBaseSize - 64;
+
+		state.emitAt(LiteralPoolOffset + 80, reinterpret_cast<const uint8_t*>(&L1_Mask), sizeof(L1_Mask));
+		state.emitAt(LiteralPoolOffset + 84, reinterpret_cast<const uint8_t*>(&L2_Mask), sizeof(L2_Mask));
+		state.emitAt(LiteralPoolOffset + 88, reinterpret_cast<const uint8_t*>(&L3_Mask), sizeof(L3_Mask));
+		state.emitAt(LiteralPoolOffset + 92, reinterpret_cast<const uint8_t*>(&DatasetBaseSize_Mask), sizeof(DatasetBaseSize_Mask));
+
 		state.emitAt(LiteralPoolSize, codeDataInit, sizeDataInit + sizePrologue + sizeLoopBegin);
 		entryDataInit = state.code + LiteralPoolSize;
 		entryProgram = state.code + LiteralPoolSize + sizeDataInit;
 		//jal x1, SuperscalarHash
 		emitJump(state, ReturnReg, LiteralPoolSize + offsetFixDataCall, SuperScalarHashOffset);
 
-		if (randomx::cpu.hasRVV() && (randomx::cpu.getRVV_Length() >= 128)) {
-			vectorRegisterLength = randomx::cpu.getRVV_Length();
-
+		if (false) {
 			vectorCodeSize = ((uint8_t*)randomx_riscv64_vector_code_end) - ((uint8_t*)randomx_riscv64_vector_code_begin);
-			vectorCode = static_cast<uint8_t*>(allocMemoryPages(vectorCodeSize));
+			vectorCode = static_cast<uint8_t*>(allocExecutableMemory(vectorCodeSize, hugePagesJIT && hugePagesEnable));
 
 			if (vectorCode) {
 				memcpy(vectorCode, reinterpret_cast<uint8_t*>(randomx_riscv64_vector_code_begin), vectorCodeSize);
 				entryProgramVector = vectorCode + (((uint8_t*)randomx_riscv64_vector_program_begin) - ((uint8_t*)randomx_riscv64_vector_code_begin));
-				entryDataInitVector = vectorCode + (((uint8_t*)randomx_riscv64_vector_sshash_dataset_init) - ((uint8_t*)randomx_riscv64_vector_code_begin));
 			}
 		}
 	}
@@ -652,52 +667,64 @@ namespace randomx {
 		}
 	}
 
-	void JitCompilerRV64::enableAll() {
-		setPagesRWX(entryDataInit, ExecutableSize);
+	void JitCompilerRV64::enableWriting() const
+	{
+#ifdef _WIN32
+		DWORD oldProtect;
+		VirtualProtect(entryDataInit, ExecutableSize, PAGE_READWRITE, &oldProtect);
 		if (vectorCode) {
-			setPagesRWX(vectorCode, vectorCodeSize);
+			VirtualProtect(vectorCode, vectorCodeSize, PAGE_READWRITE, &oldProtect);
 		}
+#else
+		mprotect(entryDataInit, ExecutableSize, PROT_READ | PROT_WRITE);
+		if (vectorCode) {
+			mprotect(vectorCode, vectorCodeSize, PROT_READ | PROT_WRITE);
+		}
+#endif
 	}
 
-	void JitCompilerRV64::enableWriting() {
-		setPagesRW(entryDataInit, ExecutableSize);
+	void JitCompilerRV64::enableExecution() const
+	{
+#ifdef _WIN32
+		DWORD oldProtect;
+		VirtualProtect(entryDataInit, ExecutableSize, PAGE_EXECUTE_READ, &oldProtect);
 		if (vectorCode) {
-			setPagesRW(vectorCode, vectorCodeSize);
+			VirtualProtect(vectorCode, vectorCodeSize, PAGE_EXECUTE_READ, &oldProtect);
 		}
+#else
+		mprotect(entryDataInit, ExecutableSize, PROT_READ | PROT_EXEC);
+		if (vectorCode) {
+			mprotect(vectorCode, vectorCodeSize, PROT_READ | PROT_EXEC);
+		}
+#endif
+		__builtin___clear_cache(reinterpret_cast<char*>(entryDataInit), reinterpret_cast<char*>(entryDataInit) + ExecutableSize);
 	}
 
-	void JitCompilerRV64::enableExecution() {
-		setPagesRX(entryDataInit, ExecutableSize);
+	void JitCompilerRV64::generateProgram(Program& prog, ProgramConfiguration& pcfg, uint32_t) {
 		if (vectorCode) {
-			setPagesRX(vectorCode, vectorCodeSize);
-		}
-	}
-
-	void JitCompilerRV64::generateProgram(Program& prog, ProgramConfiguration& pcfg) {
-		if (vectorCode) {
-			generateProgramVectorRV64(vectorCode, prog, pcfg, instMap, nullptr, 0, flags);
+			generateProgramVectorRV64(vectorCode, prog, pcfg, inst_map, nullptr, 0);
 			return;
 		}
 
-		emitProgramPrefix(state, prog, pcfg, flags);
+		emitProgramPrefix(state, prog, pcfg);
 		int32_t fixPos = state.codePos;
 		state.emit(codeDataRead, sizeDataRead);
 		//xor x8, x{readReg2}, x{readReg3}
 		state.emitAt(fixPos, rvi(rv64::XOR, Tmp1Reg, regR(pcfg.readReg2), regR(pcfg.readReg3)));
 		int32_t fixPos2 = state.codePos;
 		state.emit(codeDataRead2, sizeDataRead2);
-		state.emitAt(fixPos2, (uint16_t)((flags & RANDOMX_FLAG_V2) ? 0x1402 : 0x0001));
-		emitProgramSuffix(state, pcfg, flags);
+		state.emitAt(fixPos2, (uint16_t)(RandomX_CurrentConfig.Tweak_V2_PREFETCH ? 0x1402 : 0x0001));
+		emitProgramSuffix(state, pcfg);
 		clearCache(state);
 	}
 
 	void JitCompilerRV64::generateProgramLight(Program& prog, ProgramConfiguration& pcfg, uint32_t datasetOffset) {
 		if (vectorCode) {
-			generateProgramVectorRV64(vectorCode, prog, pcfg, instMap, entryDataInit, datasetOffset, flags);
+			generateProgramVectorRV64(vectorCode, prog, pcfg, inst_map, entryDataInit, datasetOffset);
 			return;
 		}
 
-		emitProgramPrefix(state, prog, pcfg, flags);
+		emitProgramPrefix(state, prog, pcfg);
 		int32_t fixPos = state.codePos;
 		state.emit(codeDataReadLight, sizeDataReadLight);
 		//xor x8, x{readReg2}, x{readReg3}
@@ -709,7 +736,7 @@ namespace randomx {
 		state.emitAt(fixPos + 4, rv64::LUI | (uimm << 12) | rvrd(Tmp2Reg));
 		//addi x9, x9, {limm}
 		state.emitAt(fixPos + 8, rvi(rv64::ADDI, Tmp2Reg, Tmp2Reg, limm));
-		if (flags & RANDOMX_FLAG_V2) {
+		if (RandomX_CurrentConfig.Tweak_V2_PREFETCH) {
 			state.emit(codeDataReadLight2, sizeDataReadLight2);
 		}
 		else {
@@ -719,27 +746,42 @@ namespace randomx {
 		state.emit(codeFixLoopCall, sizeFixLoopCall);
 		//jal x1, SuperscalarHash
 		emitJump(state, ReturnReg, fixPos, SuperScalarHashOffset);
-		emitProgramSuffix(state, pcfg, flags);
+		emitProgramSuffix(state, pcfg);
 		clearCache(state);
 	}
 
-	void JitCompilerRV64::generateSuperscalarHash(SuperscalarProgramList &programs, std::vector<uint64_t>& reciprocalCache) {
+	template<size_t N>
+	void JitCompilerRV64::generateSuperscalarHash(SuperscalarProgram(&programs)[N]) {
 		if (vectorCode) {
-			entryDataInitVector = generateDatasetInitVectorRV64(vectorCode, programs, reciprocalCache);
+			entryDataInitVector = generateDatasetInitVectorRV64(vectorCode, programs, RandomX_ConfigurationBase::CacheAccesses);
 			// No return here because we also need the scalar dataset init function for the light mode
 		}
 
 		state.codePos = SuperScalarHashOffset;
 		state.rcpCount = 0;
 		state.emit(codeSshInit, sizeSshInit);
-		for (unsigned j = 0; j < programs.size(); ++j) {
+
+		std::pair<uint32_t, uint32_t> lastLiteral{ 0xFFFFFFFFUL, 0xFFFFFFFFUL };
+
+		for (int j = RandomX_ConfigurationBase::CacheAccesses - 1; (j >= 0) && (lastLiteral.first == 0xFFFFFFFFUL); --j) {
+			SuperscalarProgram& prog = programs[j];
+			for (int i = prog.getSize() - 1; i >= 0; --i) {
+				if (prog(i).opcode == static_cast<uint8_t>(SuperscalarInstructionType::IMUL_RCP)) {
+					lastLiteral.first = j;
+					lastLiteral.second = i;
+					break;
+				}
+			}
+		}
+
+		for (unsigned j = 0; j < RandomX_ConfigurationBase::CacheAccesses; ++j) {
 			SuperscalarProgram& prog = programs[j];
 			for (unsigned i = 0; i < prog.getSize(); ++i) {
 				Instruction instr = prog(i);
-				generateSuperscalarCode(state, instr, reciprocalCache);
+				generateSuperscalarCode(state, instr, (j == lastLiteral.first) && (i == lastLiteral.second));
 			}
 			state.emit(codeSshLoad, sizeSshLoad);
-			if (j < programs.size() - 1) {
+			if (j < RandomX_ConfigurationBase::CacheAccesses - 1) {
 				int32_t fixPos = state.codePos;
 				state.emit(codeSshPrefetch, sizeSshPrefetch);
 				//and x7, x{addrReg}, x7
@@ -750,7 +792,9 @@ namespace randomx {
 		clearCache(state);
 	}
 
-	static void h_IADD_RS(HANDLER_ARGS) {
+	template void JitCompilerRV64::generateSuperscalarHash(SuperscalarProgram(&)[RANDOMX_CACHE_MAX_ACCESSES]);
+
+	void JitCompilerRV64::v1_IADD_RS(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		int shift = isn.getModShift();
 		if (shift == 0) {
@@ -775,41 +819,34 @@ namespace randomx {
 		}
 	}
 
-	static void h_IADD_M(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_IADD_M(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		loadFromScratchpad(state, isn);
 		//c.add x{dst}, x8
 		state.emit(rvc(rv64::C_ADD, regR(isn.dst), Tmp1Reg));
 	}
 
-	static void h_ISUB_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_ISUB_R(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		if (isn.src != isn.dst) {
 			//sub x{dst}, x{dst}, x{src}
 			state.emit(rvi(rv64::SUB, regR(isn.dst), regR(isn.dst), regR(isn.src)));
 		}
 		else {
-			const uint32_t uimm = isn.getImm32();
-			if (uimm == 0x80000000ul) {
-				state.emit(rv64::LUI | (0x80000 << 12) | rvrd(Tmp1Reg));
-				state.emit(rvi(rv64::SUB, regR(isn.dst), regR(isn.dst), Tmp1Reg));
-			}
-			else {
-				int32_t imm = unsigned32ToSigned2sCompl(-uimm); //convert to add
-				//x{dst} = x{dst} + {-imm}
-				emitImm32(state, imm, regR(isn.dst), regR(isn.dst), Tmp1Reg);
-			}
+			int32_t imm = unsigned32ToSigned2sCompl(-isn.getImm32()); //convert to add
+			//x{dst} = x{dst} + {-imm}
+			emitImm32(state, imm, regR(isn.dst), regR(isn.dst), Tmp1Reg);
 		}
 	}
 
-	static void h_ISUB_M(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_ISUB_M(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		loadFromScratchpad(state, isn);
 		//sub x{dst}, x{dst}, x8
 		state.emit(rvi(rv64::SUB, regR(isn.dst), regR(isn.dst), Tmp1Reg));
 	}
 
-	static void h_IMUL_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_IMUL_R(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		if (isn.src != isn.dst) {
 			//mul x{dst}, x{dst}, x{src}
@@ -824,40 +861,40 @@ namespace randomx {
 		}
 	}
 
-	static void h_IMUL_M(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_IMUL_M(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		loadFromScratchpad(state, isn);
 		//mul x{dst}, x{dst}, x8
 		state.emit(rvi(rv64::MUL, regR(isn.dst), regR(isn.dst), Tmp1Reg));
 	}
 
-	static void h_IMULH_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_IMULH_R(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		//mulhu x{dst}, x{dst}, x{src}
 		state.emit(rvi(rv64::MULHU, regR(isn.dst), regR(isn.dst), regR(isn.src)));
 	}
 
-	static void h_IMULH_M(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_IMULH_M(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		loadFromScratchpad(state, isn);
 		//mulhu x{dst}, x{dst}, x8
 		state.emit(rvi(rv64::MULHU, regR(isn.dst), regR(isn.dst), Tmp1Reg));
 	}
 
-	static void h_ISMULH_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_ISMULH_R(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		//mulh x{dst}, x{dst}, x{src}
 		state.emit(rvi(rv64::MULH, regR(isn.dst), regR(isn.dst), regR(isn.src)));
 	}
 
-	static void h_ISMULH_M(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_ISMULH_M(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		loadFromScratchpad(state, isn);
 		//mulh x{dst}, x{dst}, x8
 		state.emit(rvi(rv64::MULH, regR(isn.dst), regR(isn.dst), Tmp1Reg));
 	}
 
-	static void h_IMUL_RCP(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_IMUL_RCP(HANDLER_ARGS) {
 		const uint32_t divisor = isn.getImm32();
 		if (!isZeroOrPowerOf2(divisor)) {
 			state.registerUsage[isn.dst] = i;
@@ -882,13 +919,13 @@ namespace randomx {
 		}
 	}
 
-	static void h_INEG_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_INEG_R(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		//sub x{dst}, x0, x{dst}
 		state.emit(rvi(rv64::SUB, regR(isn.dst), 0, regR(isn.dst)));
 	}
 
-	static void h_IXOR_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_IXOR_R(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		if (isn.src != isn.dst) {
 			//xor x{dst}, x{dst}, x{src}
@@ -903,14 +940,14 @@ namespace randomx {
 		}
 	}
 
-	static void h_IXOR_M(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_IXOR_M(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 		loadFromScratchpad(state, isn);
 		//xor x{dst}, x{dst}, x8
 		state.emit(rvi(rv64::XOR, regR(isn.dst), regR(isn.dst), Tmp1Reg));
 	}
 
-	static void h_IROR_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_IROR_R(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 #ifdef __riscv_zbb
 		if (isn.src != isn.dst) {
@@ -948,7 +985,7 @@ namespace randomx {
 #endif
 	}
 
-	static void h_IROL_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_IROL_R(HANDLER_ARGS) {
 		state.registerUsage[isn.dst] = i;
 #ifdef __riscv_zbb
 		if (isn.src != isn.dst) {
@@ -986,7 +1023,7 @@ namespace randomx {
 #endif
 	}
 
-	static void h_ISWAP_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_ISWAP_R(HANDLER_ARGS) {
 		if (isn.src != isn.dst) {
 			state.registerUsage[isn.dst] = i;
 			state.registerUsage[isn.src] = i;
@@ -999,7 +1036,7 @@ namespace randomx {
 		}
 	}
 
-	static void h_FSWAP_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_FSWAP_R(HANDLER_ARGS) {
 		//fmv.d f24, f{dst_lo}
 		state.emit(rvi(rv64::FMV_D, Tmp1RegF, regLoF(isn.dst), regLoF(isn.dst)));
 		//fmv.d f{dst_lo}, f{dst_hi}
@@ -1008,7 +1045,7 @@ namespace randomx {
 		state.emit(rvi(rv64::FMV_D, regHiF(isn.dst), Tmp1RegF, Tmp1RegF));
 	}
 
-	static void h_FADD_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_FADD_R(HANDLER_ARGS) {
 		isn.dst %= RegisterCountFlt;
 		isn.src %= RegisterCountFlt;
 		//fadd.d f{dst_lo}, f{dst_lo}, f{src_lo}
@@ -1017,7 +1054,7 @@ namespace randomx {
 		state.emit(rvi(rv64::FADD_D, regHiF(isn.dst), regHiF(isn.dst), regHiA(isn.src)));
 	}
 
-	static void h_FADD_M(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_FADD_M(HANDLER_ARGS) {
 		isn.dst %= RegisterCountFlt;
 		//x9 = mem
 		genAddressReg(state, isn);
@@ -1035,7 +1072,7 @@ namespace randomx {
 		state.emit(rvi(rv64::FADD_D, regHiF(isn.dst), regHiF(isn.dst), Tmp2RegF));
 	}
 
-	static void h_FSUB_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_FSUB_R(HANDLER_ARGS) {
 		isn.dst %= RegisterCountFlt;
 		isn.src %= RegisterCountFlt;
 		//fsub.d f{dst_lo}, f{dst_lo}, f{src_lo}
@@ -1044,7 +1081,7 @@ namespace randomx {
 		state.emit(rvi(rv64::FSUB_D, regHiF(isn.dst), regHiF(isn.dst), regHiA(isn.src)));
 	}
 
-	static void h_FSUB_M(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_FSUB_M(HANDLER_ARGS) {
 		isn.dst %= RegisterCountFlt;
 		//x9 = mem
 		genAddressReg(state, isn);
@@ -1062,7 +1099,7 @@ namespace randomx {
 		state.emit(rvi(rv64::FSUB_D, regHiF(isn.dst), regHiF(isn.dst), Tmp2RegF));
 	}
 
-	static void h_FSCAL_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_FSCAL_R(HANDLER_ARGS) {
 		isn.dst %= RegisterCountFlt;
 		//fmv.x.d x8, f{dst_lo}
 		state.emit(rvi(rv64::FMV_X_D, Tmp1Reg, regLoF(isn.dst)));
@@ -1078,7 +1115,7 @@ namespace randomx {
 		state.emit(rvi(rv64::FMV_D_X, regHiF(isn.dst), Tmp2Reg));
 	}
 
-	static void h_FMUL_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_FMUL_R(HANDLER_ARGS) {
 		isn.dst %= RegisterCountFlt;
 		isn.src %= RegisterCountFlt;
 		//fmul.d f{dst_lo}, f{dst_lo}, f{src_lo}
@@ -1087,7 +1124,7 @@ namespace randomx {
 		state.emit(rvi(rv64::FMUL_D, regHiE(isn.dst), regHiE(isn.dst), regHiA(isn.src)));
 	}
 
-	static void h_FDIV_M(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_FDIV_M(HANDLER_ARGS) {
 		isn.dst %= RegisterCountFlt;
 		//x9 = mem
 		genAddressReg(state, isn);
@@ -1121,7 +1158,7 @@ namespace randomx {
 		state.emit(rvi(rv64::FDIV_D, regHiE(isn.dst), regHiE(isn.dst), Tmp2RegF));
 	}
 
-	static void h_FSQRT_R(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_FSQRT_R(HANDLER_ARGS) {
 		isn.dst %= RegisterCountFlt;
 		//fsqrt.d f{dst_lo}, f{dst_lo}
 		state.emit(rvi(rv64::FSQRT_D, regLoE(isn.dst), regLoE(isn.dst)));
@@ -1129,16 +1166,16 @@ namespace randomx {
 		state.emit(rvi(rv64::FSQRT_D, regHiE(isn.dst), regHiE(isn.dst)));
 	}
 
-	static void h_CBRANCH(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_CBRANCH(HANDLER_ARGS) {
 		int reg = isn.dst;
 		int target = state.registerUsage[reg] + 1;
-		int shift = isn.getModCond() + ConditionOffset;
+		int shift = isn.getModCond() + RandomX_ConfigurationBase::JumpOffset;
 		int32_t imm = unsigned32ToSigned2sCompl(isn.getImm32());
 		imm |= (1UL << shift);
-		if (ConditionOffset > 0 || shift > 0)
+		if (RandomX_ConfigurationBase::JumpOffset > 0 || shift > 0)
 			imm &= ~(1UL << (shift - 1));
 		//x8 = branchMask
-		emitImm32(state, (int32_t)ConditionMask << shift, Tmp1Reg);
+		emitImm32(state, (int32_t)((1 << RandomX_ConfigurationBase::JumpBits) - 1) << shift, Tmp1Reg);
 		//x{dst} += {imm}
 		emitImm32(state, imm, regR(isn.dst), regR(isn.dst), Tmp2Reg);
 		//and x8, x8, x{dst}
@@ -1175,7 +1212,7 @@ namespace randomx {
 		}
 	}
 
-	static void h_CFROUND(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_CFROUND(HANDLER_ARGS) {
 		int32_t imm = (isn.getImm32() - 2) & 63; //-2 to avoid a later left shift to multiply by 4
 		if (imm != 0) {
 #ifdef __riscv_zbb
@@ -1190,7 +1227,7 @@ namespace randomx {
 			//c.or x8, x9
 			state.emit(rvc(rv64::C_OR, Tmp1Reg + OffsetXC, Tmp2Reg + OffsetXC));
 #endif
-			if (flags & RANDOMX_FLAG_V2) {
+			if (RandomX_CurrentConfig.Tweak_V2_CFROUND) {
 				//andi x9, x8, 240
 				state.emit(rvi(rv64::ANDI, Tmp2Reg, Tmp1Reg, 240));
 				//c.bnez x9, +12
@@ -1200,7 +1237,7 @@ namespace randomx {
 			state.emit(rvc(rv64::C_ANDI, Tmp1Reg + OffsetXC, 12));
 		}
 		else {
-			if (flags & RANDOMX_FLAG_V2) {
+			if (RandomX_CurrentConfig.Tweak_V2_CFROUND) {
 				//andi x9, x{src}, 240
 				state.emit(rvi(rv64::ANDI, Tmp2Reg, regR(isn.src), 240));
 				//c.bnez x9, +14
@@ -1217,89 +1254,15 @@ namespace randomx {
 		state.emit(rvi(rv64::FSRM, 0, Tmp1Reg, 0));
 	}
 
-	static void h_ISTORE(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_ISTORE(HANDLER_ARGS) {
 		genAddressRegDst(state, isn);
 		//sd x{src}, 0(x9)
 		state.emit(rvi(rv64::SD, 0, Tmp2Reg, regR(isn.src)));
 	}
 
-	static void h_NOP(HANDLER_ARGS) {
+	void JitCompilerRV64::v1_NOP(HANDLER_ARGS) {
 	}
+
+alignas(64) InstructionGeneratorRV64 JitCompilerRV64::engine[256] = {};
+alignas(64) uint8_t JitCompilerRV64::inst_map[256] = {};
 }
-
-#include "instruction_weights.hpp"
-
-namespace {
-
-#define INST_HANDLE(x) REPN(&randomx::h_##x, WT(x))
-
-	InstructionHandler* opcodeMap1[256] = {
-		INST_HANDLE(IADD_RS)
-		INST_HANDLE(IADD_M)
-		INST_HANDLE(ISUB_R)
-		INST_HANDLE(ISUB_M)
-		INST_HANDLE(IMUL_R)
-		INST_HANDLE(IMUL_M)
-		INST_HANDLE(IMULH_R)
-		INST_HANDLE(IMULH_M)
-		INST_HANDLE(ISMULH_R)
-		INST_HANDLE(ISMULH_M)
-		INST_HANDLE(IMUL_RCP)
-		INST_HANDLE(INEG_R)
-		INST_HANDLE(IXOR_R)
-		INST_HANDLE(IXOR_M)
-		INST_HANDLE(IROR_R)
-		INST_HANDLE(IROL_R)
-		INST_HANDLE(ISWAP_R)
-		INST_HANDLE(FSWAP_R)
-		INST_HANDLE(FADD_R)
-		INST_HANDLE(FADD_M)
-		INST_HANDLE(FSUB_R)
-		INST_HANDLE(FSUB_M)
-		INST_HANDLE(FSCAL_R)
-		INST_HANDLE(FMUL_R)
-		INST_HANDLE(FDIV_M)
-		INST_HANDLE(FSQRT_R)
-		INST_HANDLE(CBRANCH)
-		INST_HANDLE(CFROUND)
-		INST_HANDLE(ISTORE)
-		INST_HANDLE(NOP)
-	};
-
-#undef INST_HANDLE
-}
-
-#define INST_HANDLE(x) REPN(static_cast<uint8_t>(randomx::InstructionType::x), WT(x))
-
-alignas(64) uint8_t randomx::JitCompilerRV64::instMap[256] = {
-	INST_HANDLE(IADD_RS)
-	INST_HANDLE(IADD_M)
-	INST_HANDLE(ISUB_R)
-	INST_HANDLE(ISUB_M)
-	INST_HANDLE(IMUL_R)
-	INST_HANDLE(IMUL_M)
-	INST_HANDLE(IMULH_R)
-	INST_HANDLE(IMULH_M)
-	INST_HANDLE(ISMULH_R)
-	INST_HANDLE(ISMULH_M)
-	INST_HANDLE(IMUL_RCP)
-	INST_HANDLE(INEG_R)
-	INST_HANDLE(IXOR_R)
-	INST_HANDLE(IXOR_M)
-	INST_HANDLE(IROR_R)
-	INST_HANDLE(IROL_R)
-	INST_HANDLE(ISWAP_R)
-	INST_HANDLE(FSWAP_R)
-	INST_HANDLE(FADD_R)
-	INST_HANDLE(FADD_M)
-	INST_HANDLE(FSUB_R)
-	INST_HANDLE(FSUB_M)
-	INST_HANDLE(FSCAL_R)
-	INST_HANDLE(FMUL_R)
-	INST_HANDLE(FDIV_M)
-	INST_HANDLE(FSQRT_R)
-	INST_HANDLE(CBRANCH)
-	INST_HANDLE(CFROUND)
-	INST_HANDLE(ISTORE)
-	INST_HANDLE(NOP)
-};

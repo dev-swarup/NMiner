@@ -31,52 +31,121 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <cstdint>
 #include <cstring>
 #include <vector>
-#include "jit_compiler.hpp"
+#include "common.hpp"
+#include "jit_compiler_rv64_static.hpp"
 
 namespace randomx {
+
+	struct CodeBuffer {
+		uint8_t* code;
+		int32_t codePos;
+		int32_t rcpCount;
+
+		void emit(const uint8_t* src, int32_t len) {
+			memcpy(&code[codePos], src, len);
+			codePos += len;
+		}
+
+		template<typename T>
+		void emit(T src) {
+			memcpy(&code[codePos], &src, sizeof(src));
+			codePos += sizeof(src);
+		}
+
+		void emitAt(int32_t codePos, const uint8_t* src, int32_t len) {
+			memcpy(&code[codePos], src, len);
+		}
+
+		template<typename T>
+		void emitAt(int32_t codePos, T src) {
+			memcpy(&code[codePos], &src, sizeof(src));
+		}
+	};
+
+	struct CompilerState : public CodeBuffer {
+		int32_t instructionOffsets[RANDOMX_PROGRAM_MAX_SIZE];
+		int registerUsage[RegistersCount];
+	};
 
 	class Program;
 	struct ProgramConfiguration;
 	class SuperscalarProgram;
 	class Instruction;
 
+#define HANDLER_ARGS randomx::CompilerState& state, randomx::Instruction isn, int i
+	typedef void(*InstructionGeneratorRV64)(HANDLER_ARGS);
+
 	class JitCompilerRV64 {
 	public:
-		JitCompilerRV64();
+		JitCompilerRV64(bool hugePagesEnable, bool optimizedInitDatasetEnable);
 		~JitCompilerRV64();
-		void generateProgram(Program&, ProgramConfiguration&);
+
+		void prepare() {}
+		void generateProgram(Program&, ProgramConfiguration&, uint32_t);
 		void generateProgramLight(Program&, ProgramConfiguration&, uint32_t);
-		void generateSuperscalarHash(SuperscalarProgramList &programs, std::vector<uint64_t>&);
+
+		template<size_t N>
+		void generateSuperscalarHash(SuperscalarProgram(&programs)[N]);
+
 		void generateDatasetInitCode() {}
+
 		ProgramFunc* getProgramFunc() {
 			return (ProgramFunc*)(vectorCode ? entryProgramVector : entryProgram);
 		}
 		DatasetInitFunc* getDatasetInitFunc() {
-			return (DatasetInitFunc*)((vectorCode && (vectorRegisterLength >= 256)) ? entryDataInitVector : entryDataInit);
+			return (DatasetInitFunc*)(vectorCode ? entryDataInitVector : entryDataInit);
 		}
 		uint8_t* getCode() {
-			return vectorCode ? vectorCode : state.code;
+			return state.code;
 		}
 		size_t getCodeSize();
-		void enableWriting();
-		void enableExecution();
-		void enableAll();
 
-		void setFlags(randomx_flags f) { flags = f; }
+		void enableWriting() const;
+		void enableExecution() const;
 
-		static uint8_t instMap[256];
+		static InstructionGeneratorRV64 engine[256];
+		static uint8_t inst_map[256];
 	private:
 		CompilerState state;
 
-		randomx_flags flags;
-
 		uint8_t* vectorCode = nullptr;
 		size_t vectorCodeSize = 0;
-		int vectorRegisterLength = 0;
 
 		void* entryDataInit = nullptr;
 		void* entryDataInitVector = nullptr;
 		void* entryProgram = nullptr;
 		void* entryProgramVector = nullptr;
+
+	public:
+		static void v1_IADD_RS(HANDLER_ARGS);
+		static void v1_IADD_M(HANDLER_ARGS);
+		static void v1_ISUB_R(HANDLER_ARGS);
+		static void v1_ISUB_M(HANDLER_ARGS);
+		static void v1_IMUL_R(HANDLER_ARGS);
+		static void v1_IMUL_M(HANDLER_ARGS);
+		static void v1_IMULH_R(HANDLER_ARGS);
+		static void v1_IMULH_M(HANDLER_ARGS);
+		static void v1_ISMULH_R(HANDLER_ARGS);
+		static void v1_ISMULH_M(HANDLER_ARGS);
+		static void v1_IMUL_RCP(HANDLER_ARGS);
+		static void v1_INEG_R(HANDLER_ARGS);
+		static void v1_IXOR_R(HANDLER_ARGS);
+		static void v1_IXOR_M(HANDLER_ARGS);
+		static void v1_IROR_R(HANDLER_ARGS);
+		static void v1_IROL_R(HANDLER_ARGS);
+		static void v1_ISWAP_R(HANDLER_ARGS);
+		static void v1_FSWAP_R(HANDLER_ARGS);
+		static void v1_FADD_R(HANDLER_ARGS);
+		static void v1_FADD_M(HANDLER_ARGS);
+		static void v1_FSUB_R(HANDLER_ARGS);
+		static void v1_FSUB_M(HANDLER_ARGS);
+		static void v1_FSCAL_R(HANDLER_ARGS);
+		static void v1_FMUL_R(HANDLER_ARGS);
+		static void v1_FDIV_M(HANDLER_ARGS);
+		static void v1_FSQRT_R(HANDLER_ARGS);
+		static void v1_CBRANCH(HANDLER_ARGS);
+		static void v1_CFROUND(HANDLER_ARGS);
+		static void v1_ISTORE(HANDLER_ARGS);
+		static void v1_NOP(HANDLER_ARGS);
 	};
 }

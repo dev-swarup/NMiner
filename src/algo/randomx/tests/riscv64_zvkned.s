@@ -1,4 +1,4 @@
-/* RISC-V - test if the vector AES extension is present */
+/* RISC-V - test if the vector bit manipulation extension is present */
 
 .text
 .option arch, rv64gcv_zvkned

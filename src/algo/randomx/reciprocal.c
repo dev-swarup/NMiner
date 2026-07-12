@@ -44,29 +44,49 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 	ret
 
 */
-uint64_t randomx_reciprocal(uint32_t divisor) {
+uint64_t randomx_reciprocal(uint64_t divisor) {
 
 	assert(divisor != 0);
 
 	const uint64_t p2exp63 = 1ULL << 63;
-	const uint64_t q = p2exp63 / divisor;
-	const uint64_t r = p2exp63 % divisor;
 
-#ifdef __GNUC__
-	const uint32_t shift = 64 - __builtin_clzll(divisor);
-#else
-	uint32_t shift = 32;
-	for (uint32_t k = 1U << 31; (k & divisor) == 0; k >>= 1)
-		--shift;
-#endif
+	uint64_t quotient = p2exp63 / divisor, remainder = p2exp63 % divisor;
 
-	return (q << shift) + ((r << shift) / divisor);
+	unsigned bsr = 0; //highest set bit in divisor
+
+	for (uint64_t bit = divisor; bit > 0; bit >>= 1)
+		bsr++;
+
+	for (unsigned shift = 0; shift < bsr; shift++) {
+		if (remainder >= divisor - remainder) {
+			quotient = quotient * 2 + 1;
+			remainder = remainder * 2 - divisor;
+		}
+		else {
+			quotient = quotient * 2;
+			remainder = remainder * 2;
+		}
+	}
+
+	return quotient;
 }
 
 #if !RANDOMX_HAVE_FAST_RECIPROCAL
 
-uint64_t randomx_reciprocal_fast(uint32_t divisor) {
+#ifdef __GNUC__
+uint64_t randomx_reciprocal_fast(uint64_t divisor)
+{
+	const uint64_t q = (1ULL << 63) / divisor;
+	const uint64_t r = (1ULL << 63) % divisor;
+
+	const uint64_t shift = 64 - __builtin_clzll(divisor);
+
+	return (q << shift) + ((r << shift) / divisor);
+}
+#else
+uint64_t randomx_reciprocal_fast(uint64_t divisor) {
 	return randomx_reciprocal(divisor);
 }
+#endif
 
 #endif

@@ -61,7 +61,7 @@ constexpr int RoundToZero = 3;
 //the library "sqrt" function provided by MSVC for x86 targets doesn't give
 //the correct results, so we have to use inline assembly to call x87 fsqrt directly
 #if !defined(__SSE2__)
-#if defined(_MSC_VER) && defined(_M_IX86)
+#if defined(_M_IX86)
 inline double __cdecl rx_sqrt(double x) {
 	__asm {
 		fld x
@@ -124,10 +124,9 @@ FORCE_INLINE rx_vec_f128 rx_set1_vec_f128(uint64_t x) {
 	return _mm_castsi128_pd(_mm_set1_epi64x(x));
 }
 
-#define rx_cast_vec_i2f _mm_castsi128_pd
-#define rx_cast_vec_f2i _mm_castpd_si128
 #define rx_xor_vec_f128 _mm_xor_pd
 #define rx_and_vec_f128 _mm_and_pd
+#define rx_and_vec_i128 _mm_and_si128
 #define rx_or_vec_f128 _mm_or_pd
 
 #ifdef __AES__
@@ -135,7 +134,7 @@ FORCE_INLINE rx_vec_f128 rx_set1_vec_f128(uint64_t x) {
 #define rx_aesenc_vec_i128 _mm_aesenc_si128
 #define rx_aesdec_vec_i128 _mm_aesdec_si128
 
-#define HAVE_AES 1
+#define HAVE_AES
 
 #endif //__AES__
 
@@ -175,11 +174,7 @@ FORCE_INLINE void rx_set_rounding_mode(uint32_t mode) {
 	_mm_setcsr(rx_mxcsr_default | (mode << 13));
 }
 
-FORCE_INLINE uint32_t rx_get_rounding_mode() {
-	return (_mm_getcsr() >> 13) & 3;
-}
-
-#elif defined(__PPC64__) && defined(__ALTIVEC__) && defined(__VSX__) //sadly only POWER7 and newer will be able to use SIMD acceleration. Earlier processors cant use doubles or 64 bit integers with SIMD
+#elif defined(__PPC64__) && defined(__ALTIVEC__) && defined(__VSX__) //sadly only POWER7 and newer will be able to use SIMD acceleration. Earlier processors can't use doubles or 64 bit integers with SIMD
 #include <cstdint>
 #include <stdexcept>
 #include <cstdlib>
@@ -205,7 +200,18 @@ typedef union{
 	int i32[4];
 } vec_u;
 
-#define rx_aligned_alloc(a, b) malloc(a)
+#ifdef HAVE_POSIX_MEMALIGN
+inline void* rx_aligned_alloc(size_t size, size_t align) {
+    void* p;
+    if (posix_memalign(&p, align, size) == 0)
+        return p;
+
+    return 0;
+};
+#else
+#   define rx_aligned_alloc(a, b) malloc(a)
+#endif
+
 #define rx_aligned_free(a) free(a)
 #define rx_prefetch_nta(x)
 #define rx_prefetch_t0(x)
@@ -276,20 +282,16 @@ FORCE_INLINE rx_vec_f128 rx_set1_vec_f128(uint64_t x) {
 	return (rx_vec_f128)vec_splat2sd(x);
 }
 
-FORCE_INLINE rx_vec_f128 rx_cast_vec_i2f(rx_vec_i128 a) {
-	return (rx_vec_f128)a;
-}
-
-FORCE_INLINE rx_vec_i128 rx_cast_vec_f2i(rx_vec_f128 a) {
-	return (rx_vec_i128)a;
-}
-
 FORCE_INLINE rx_vec_f128 rx_xor_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	return (rx_vec_f128)vec_xor(a,b);
 }
 
 FORCE_INLINE rx_vec_f128 rx_and_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	return (rx_vec_f128)vec_and(a,b);
+}
+
+FORCE_INLINE rx_vec_i128 rx_and_vec_i128(rx_vec_i128 a, rx_vec_i128 b) {
+	return (rx_vec_i128)vec_and(a, b);
 }
 
 FORCE_INLINE rx_vec_f128 rx_or_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
@@ -319,7 +321,7 @@ FORCE_INLINE rx_vec_i128 rx_aesdec_vec_i128(rx_vec_i128 v, rx_vec_i128 rkey) {
 	__m128ll out = vrev((__m128i)__builtin_crypto_vncipher(_v,zero));
 	return (rx_vec_i128)vec_xor((__m128i)out,rkey);
 }
-#define HAVE_AES 1
+#define HAVE_AES
 
 #endif //__CRYPTO__
 
@@ -347,19 +349,19 @@ FORCE_INLINE int rx_vec_i128_w(rx_vec_i128 a) {
 	return _a.i32[3];
 }
 
-FORCE_INLINE rx_vec_i128 rx_set_int_vec_i128(int i3, int i2, int i1, int i0) {
-	return (rx_vec_i128)((__m128li){i0,i1,i2,i3});
+FORCE_INLINE rx_vec_i128 rx_set_int_vec_i128(int _I3, int _I2, int _I1, int _I0) {
+	return (rx_vec_i128)((__m128li){_I0,_I1,_I2,_I3});
 };
 
-FORCE_INLINE rx_vec_i128 rx_xor_vec_i128(rx_vec_i128 a, rx_vec_i128 b) {
-	return (rx_vec_i128)vec_xor(a,b);
+FORCE_INLINE rx_vec_i128 rx_xor_vec_i128(rx_vec_i128 _A, rx_vec_i128 _B) {
+	return (rx_vec_i128)vec_xor(_A,_B);
 }
 
-FORCE_INLINE rx_vec_i128 rx_load_vec_i128(rx_vec_i128 const *p) {
+FORCE_INLINE rx_vec_i128 rx_load_vec_i128(rx_vec_i128 const *_P) {
 #if defined(NATIVE_LITTLE_ENDIAN)
-	return *p;
+	return *_P;
 #else
-	const uint32_t* ptr = (const uint32_t*)p;
+	uint32_t* ptr = (uint32_t*)_P;
 	vec_u c;
 	c.u32[0] = load32(ptr + 0);
 	c.u32[1] = load32(ptr + 1);
@@ -369,13 +371,13 @@ FORCE_INLINE rx_vec_i128 rx_load_vec_i128(rx_vec_i128 const *p) {
 #endif
 }
 
-FORCE_INLINE void rx_store_vec_i128(rx_vec_i128 *p, rx_vec_i128 b) {
+FORCE_INLINE void rx_store_vec_i128(rx_vec_i128 *_P, rx_vec_i128 _B) {
 #if defined(NATIVE_LITTLE_ENDIAN)
-	*p = b;
+	*_P = _B;
 #else
-	uint32_t* ptr = (uint32_t*)p;
+	uint32_t* ptr = (uint32_t*)_P;
 	vec_u B;
-	B.i = b;
+	B.i = _B;
 	store32(ptr + 0, B.u32[0]);
 	store32(ptr + 1, B.u32[1]);
 	store32(ptr + 2, B.u32[2]);
@@ -385,8 +387,8 @@ FORCE_INLINE void rx_store_vec_i128(rx_vec_i128 *p, rx_vec_i128 b) {
 
 FORCE_INLINE rx_vec_f128 rx_cvt_packed_int_vec_f128(const void* addr) {
 	vec_u x;
-	x.d64[0] = (double)unsigned32ToSigned2sCompl(load32((const uint8_t*)addr + 0));
-	x.d64[1] = (double)unsigned32ToSigned2sCompl(load32((const uint8_t*)addr + 4));
+	x.d64[0] = (double)unsigned32ToSigned2sCompl(load32((uint8_t*)addr + 0));
+	x.d64[1] = (double)unsigned32ToSigned2sCompl(load32((uint8_t*)addr + 4));
 	return (rx_vec_f128)x.d;
 }
 
@@ -401,17 +403,24 @@ FORCE_INLINE rx_vec_f128 rx_cvt_packed_int_vec_f128(const void* addr) {
 typedef uint8x16_t rx_vec_i128;
 typedef float64x2_t rx_vec_f128;
 
+#ifdef HAVE_POSIX_MEMALIGN
 inline void* rx_aligned_alloc(size_t size, size_t align) {
-	void* p;
-	if (posix_memalign(&p, align, size) == 0)
-		return p;
+    void* p;
+    if (posix_memalign(&p, align, size) == 0)
+        return p;
 
-	return 0;
+    return 0;
 };
+#   define rx_aligned_free(a) free(a)
+#elif defined(HAVE_ALIGNED_MALLOC)
+#   define rx_aligned_alloc(a, b) _aligned_malloc(a, b)
+#   define rx_aligned_free(a) _aligned_free(a)
+#else
+#   define rx_aligned_alloc(a, b) malloc(a)
+#   define rx_aligned_free(a) free(a)
+#endif
 
-#define rx_aligned_free(a) free(a)
-
-inline void rx_prefetch_nta(void* ptr) {
+inline void rx_prefetch_nta(const void* ptr) {
 	asm volatile ("prfm pldl1strm, [%0]\n" : : "r" (ptr));
 }
 
@@ -428,7 +437,7 @@ FORCE_INLINE void rx_store_vec_f128(double* mem_addr, rx_vec_f128 val) {
 }
 
 FORCE_INLINE rx_vec_f128 rx_swap_vec_f128(rx_vec_f128 a) {
-	float64x2_t temp;
+	float64x2_t temp{};
 	temp = vcopyq_laneq_f64(temp, 1, a, 1);
 	a = vcopyq_laneq_f64(a, 1, a, 0);
 	return vcopyq_laneq_f64(a, 0, temp, 1);
@@ -450,14 +459,6 @@ FORCE_INLINE rx_vec_f128 rx_set1_vec_f128(uint64_t x) {
 #define rx_div_vec_f128 vdivq_f64
 #define rx_sqrt_vec_f128 vsqrtq_f64
 
-FORCE_INLINE rx_vec_i128 rx_cast_vec_f2i(rx_vec_f128 x) {
-	return vreinterpretq_u8_f64(x);
-}
-
-FORCE_INLINE rx_vec_f128 rx_cast_vec_i2f(rx_vec_i128 x) {
-	return vreinterpretq_f64_u8(x);
-}
-
 FORCE_INLINE rx_vec_f128 rx_xor_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	return vreinterpretq_f64_u8(veorq_u8(vreinterpretq_u8_f64(a), vreinterpretq_u8_f64(b)));
 }
@@ -465,6 +466,8 @@ FORCE_INLINE rx_vec_f128 rx_xor_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 FORCE_INLINE rx_vec_f128 rx_and_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	return vreinterpretq_f64_u8(vandq_u8(vreinterpretq_u8_f64(a), vreinterpretq_u8_f64(b)));
 }
+
+#define rx_and_vec_i128 vandq_u8
 
 FORCE_INLINE rx_vec_f128 rx_or_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	return vreinterpretq_f64_u8(vorrq_u8(vreinterpretq_u8_f64(a), vreinterpretq_u8_f64(b)));
@@ -483,7 +486,7 @@ FORCE_INLINE rx_vec_i128 rx_aesdec_vec_i128(rx_vec_i128 a, rx_vec_i128 key) {
 	return vaesimcq_u8(vaesdq_u8(a, zero)) ^ key;
 }
 
-#define HAVE_AES 1
+#define HAVE_AES
 
 #endif
 
@@ -505,12 +508,12 @@ FORCE_INLINE int rx_vec_i128_w(rx_vec_i128 a) {
 	return vgetq_lane_s32(vreinterpretq_s32_u8(a), 3);
 }
 
-FORCE_INLINE rx_vec_i128 rx_set_int_vec_i128(int i3, int i2, int i1, int i0) {
+FORCE_INLINE rx_vec_i128 rx_set_int_vec_i128(int _I3, int _I2, int _I1, int _I0) {
 	int32_t data[4];
-	data[0] = i0;
-	data[1] = i1;
-	data[2] = i2;
-	data[3] = i3;
+	data[0] = _I0;
+	data[1] = _I1;
+	data[2] = _I2;
+	data[3] = _I3;
 	return vreinterpretq_u8_s32(vld1q_s32(data));
 };
 
@@ -527,7 +530,7 @@ FORCE_INLINE void rx_store_vec_i128(rx_vec_i128* mem_addr, rx_vec_i128 val) {
 FORCE_INLINE rx_vec_f128 rx_cvt_packed_int_vec_f128(const void* addr) {
 	double lo = unsigned32ToSigned2sCompl(load32((uint8_t*)addr + 0));
 	double hi = unsigned32ToSigned2sCompl(load32((uint8_t*)addr + 4));
-	rx_vec_f128 x;
+	rx_vec_f128 x{};
 	x = vsetq_lane_f64(lo, x, 0);
 	x = vsetq_lane_f64(hi, x, 1);
 	return x;
@@ -558,25 +561,29 @@ typedef union {
 } rx_vec_f128;
 
 #ifdef HAVE_POSIX_MEMALIGN
-#include <stdlib.h>
-
 inline void* rx_aligned_alloc(size_t size, size_t align) {
-	void* p;
-	if (posix_memalign(&p, align, size) == 0)
-		return p;
+    void* p;
+    if (posix_memalign(&p, align, size) == 0)
+        return p;
 
-	return 0;
+    return 0;
 };
+#   define rx_aligned_free(a) free(a)
+#elif defined(HAVE_ALIGNED_MALLOC)
+#   define rx_aligned_alloc(a, b) _aligned_malloc(a, b)
+#   define rx_aligned_free(a) _aligned_free(a)
+#else
+#   define rx_aligned_alloc(a, b) malloc(a)
+#   define rx_aligned_free(a) free(a)
+#endif
 
-#else // HAVE_POSIX_MEMALIGN
-
-#define rx_aligned_alloc(a, b) malloc(a)
-
-#endif // HAVE_POSIX_MEMALIGN
-
-#define rx_aligned_free(a) free(a)
+#if defined(__GNUC__) && (!defined(__clang__) || __has_builtin(__builtin_prefetch))
+#define rx_prefetch_nta(x) __builtin_prefetch((x), 0, 0)
+#define rx_prefetch_t0(x) __builtin_prefetch((x), 0, 3)
+#else
 #define rx_prefetch_nta(x)
 #define rx_prefetch_t0(x)
+#endif
 
 FORCE_INLINE rx_vec_f128 rx_load_vec_f128(const double* pd) {
 	rx_vec_f128 x;
@@ -673,6 +680,13 @@ FORCE_INLINE rx_vec_f128 rx_and_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	return x;
 }
 
+FORCE_INLINE rx_vec_i128 rx_and_vec_i128(rx_vec_i128 a, rx_vec_i128 b) {
+	rx_vec_i128 x;
+	x.u64[0] = a.u64[0] & b.u64[0];
+	x.u64[1] = a.u64[1] & b.u64[1];
+	return x;
+}
+
 FORCE_INLINE rx_vec_f128 rx_or_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	rx_vec_f128 x;
 	x.i.u64[0] = a.i.u64[0] | b.i.u64[0];
@@ -696,29 +710,29 @@ FORCE_INLINE int rx_vec_i128_w(rx_vec_i128 a) {
 	return a.u32[3];
 }
 
-FORCE_INLINE rx_vec_i128 rx_set_int_vec_i128(int i3, int i2, int i1, int i0) {
+FORCE_INLINE rx_vec_i128 rx_set_int_vec_i128(int _I3, int _I2, int _I1, int _I0) {
 	rx_vec_i128 v;
-	v.u32[0] = i0;
-	v.u32[1] = i1;
-	v.u32[2] = i2;
-	v.u32[3] = i3;
+	v.u32[0] = _I0;
+	v.u32[1] = _I1;
+	v.u32[2] = _I2;
+	v.u32[3] = _I3;
 	return v;
 };
 
-FORCE_INLINE rx_vec_i128 rx_xor_vec_i128(rx_vec_i128 a, rx_vec_i128 b) {
+FORCE_INLINE rx_vec_i128 rx_xor_vec_i128(rx_vec_i128 _A, rx_vec_i128 _B) {
 	rx_vec_i128 c;
-	c.u32[0] = a.u32[0] ^ b.u32[0];
-	c.u32[1] = a.u32[1] ^ b.u32[1];
-	c.u32[2] = a.u32[2] ^ b.u32[2];
-	c.u32[3] = a.u32[3] ^ b.u32[3];
+	c.u32[0] = _A.u32[0] ^ _B.u32[0];
+	c.u32[1] = _A.u32[1] ^ _B.u32[1];
+	c.u32[2] = _A.u32[2] ^ _B.u32[2];
+	c.u32[3] = _A.u32[3] ^ _B.u32[3];
 	return c;
 }
 
-FORCE_INLINE rx_vec_i128 rx_load_vec_i128(rx_vec_i128 const* p) {
+FORCE_INLINE rx_vec_i128 rx_load_vec_i128(rx_vec_i128 const*_P) {
 #if defined(NATIVE_LITTLE_ENDIAN)
-	return *p;
+	return *_P;
 #else
-	const uint32_t* ptr = (const uint32_t*)p;
+	uint32_t* ptr = (uint32_t*)_P;
 	rx_vec_i128 c;
 	c.u32[0] = load32(ptr + 0);
 	c.u32[1] = load32(ptr + 1);
@@ -728,44 +742,22 @@ FORCE_INLINE rx_vec_i128 rx_load_vec_i128(rx_vec_i128 const* p) {
 #endif
 }
 
-FORCE_INLINE void rx_store_vec_i128(rx_vec_i128 *p, rx_vec_i128 b) {
+FORCE_INLINE void rx_store_vec_i128(rx_vec_i128 *_P, rx_vec_i128 _B) {
 #if defined(NATIVE_LITTLE_ENDIAN)
-	*p = b;
+	*_P = _B;
 #else
-	uint32_t* ptr = (uint32_t*)p;
-	store32(ptr + 0, b.u32[0]);
-	store32(ptr + 1, b.u32[1]);
-	store32(ptr + 2, b.u32[2]);
-	store32(ptr + 3, b.u32[3]);
-#endif
-}
-
-FORCE_INLINE rx_vec_f128 rx_cast_vec_i2f(rx_vec_i128 a) {
-#if defined(NATIVE_LITTLE_ENDIAN)
-	rx_vec_f128 x;
-	x.i = a;
-	return x;
-#else
-	alignas(16) char buf[16];
-	rx_store_vec_i128((rx_vec_i128*)buf, a);
-	return rx_load_vec_f128((double*)buf);
-#endif
-}
-
-FORCE_INLINE rx_vec_i128 rx_cast_vec_f2i(rx_vec_f128 a) {
-#if defined(NATIVE_LITTLE_ENDIAN)
-	return a.i;
-#else
-	alignas(16) char buf[16];
-	rx_store_vec_f128((double*)buf, a);
-	return rx_load_vec_i128((rx_vec_i128*)buf);
+	uint32_t* ptr = (uint32_t*)_P;
+	store32(ptr + 0, _B.u32[0]);
+	store32(ptr + 1, _B.u32[1]);
+	store32(ptr + 2, _B.u32[2]);
+	store32(ptr + 3, _B.u32[3]);
 #endif
 }
 
 FORCE_INLINE rx_vec_f128 rx_cvt_packed_int_vec_f128(const void* addr) {
 	rx_vec_f128 x;
-	x.lo = (double)unsigned32ToSigned2sCompl(load32((const uint8_t*)addr + 0));
-	x.hi = (double)unsigned32ToSigned2sCompl(load32((const uint8_t*)addr + 4));
+	x.lo = (double)unsigned32ToSigned2sCompl(load32((uint8_t*)addr + 0));
+	x.hi = (double)unsigned32ToSigned2sCompl(load32((uint8_t*)addr + 4));
 	return x;
 }
 
@@ -785,9 +777,6 @@ FORCE_INLINE rx_vec_i128 rx_aesenc_vec_i128(rx_vec_i128 v, rx_vec_i128 rkey) {
 FORCE_INLINE rx_vec_i128 rx_aesdec_vec_i128(rx_vec_i128 v, rx_vec_i128 rkey) {
 	throw std::runtime_error(platformError);
 }
-
-#define HAVE_AES 0
-
 #endif
 
 #ifdef RANDOMX_DEFAULT_FENV
@@ -796,12 +785,10 @@ void rx_reset_float_state();
 
 void rx_set_rounding_mode(uint32_t mode);
 
-uint32_t rx_get_rounding_mode();
-
 #endif
 
 double loadDoublePortable(const void* addr);
 uint64_t mulh(uint64_t, uint64_t);
 int64_t smulh(int64_t, int64_t);
-uint64_t rotl(uint64_t, unsigned int);
-uint64_t rotr(uint64_t, unsigned int);
+uint64_t rotl64(uint64_t, unsigned int);
+uint64_t rotr64(uint64_t, unsigned int);

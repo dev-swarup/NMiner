@@ -1,28 +1,26 @@
 set(RANDOMX_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/src/algo/randomx" CACHE STRING "RandomX Include")
 
 list(APPEND SOURCES
+    ${RANDOMX_INCLUDE}/rx.cpp
     ${RANDOMX_INCLUDE}/aes_hash.cpp
     ${RANDOMX_INCLUDE}/argon2_ref.c
     ${RANDOMX_INCLUDE}/argon2_ssse3.c
     ${RANDOMX_INCLUDE}/argon2_avx2.c
+    ${RANDOMX_INCLUDE}/argon2_core.c
     ${RANDOMX_INCLUDE}/bytecode_machine.cpp
-    ${RANDOMX_INCLUDE}/cpu.cpp
     ${RANDOMX_INCLUDE}/dataset.cpp
     ${RANDOMX_INCLUDE}/soft_aes.cpp
-    ${RANDOMX_INCLUDE}/virtual_memory.c
     ${RANDOMX_INCLUDE}/vm_interpreted.cpp
     ${RANDOMX_INCLUDE}/allocator.cpp
-    ${RANDOMX_INCLUDE}/assembly_generator_x86.cpp
-    ${RANDOMX_INCLUDE}/instruction.cpp
     ${RANDOMX_INCLUDE}/randomx.cpp
     ${RANDOMX_INCLUDE}/superscalar.cpp
     ${RANDOMX_INCLUDE}/vm_compiled.cpp
     ${RANDOMX_INCLUDE}/vm_interpreted_light.cpp
-    ${RANDOMX_INCLUDE}/argon2_core.c
     ${RANDOMX_INCLUDE}/blake2_generator.cpp
     ${RANDOMX_INCLUDE}/instructions_portable.cpp
     ${RANDOMX_INCLUDE}/reciprocal.c
     ${RANDOMX_INCLUDE}/virtual_machine.cpp
+    ${RANDOMX_INCLUDE}/virtual_memory.cpp
     ${RANDOMX_INCLUDE}/vm_compiled_light.cpp
     ${RANDOMX_INCLUDE}/blake2/blake2b.c)
 

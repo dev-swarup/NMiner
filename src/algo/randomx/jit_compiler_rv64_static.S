@@ -58,10 +58,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .global DECL(randomx_riscv64_ssh_end)
 
 /* The literal pool can fit at most 494 IMUL_RCP literals */
-#if RANDOMX_PROGRAM_MAX_SIZE > 494
-    #error RANDOMX_PROGRAM_MAX_SIZE larger than 494 is not supported.
+#if RANDOMX_PROGRAM_SIZE > 494
+    #error RANDOMX_PROGRAM_SIZE larger than 494 is not supported.
 #endif
 
+#define RANDOMX_ARGON_MEMORY 262144
 #define RANDOMX_CACHE_MASK (RANDOMX_ARGON_MEMORY*16-1)
 
 /* shared literal pool: 4 KB */
@@ -84,10 +85,10 @@ literal_pool:
     .word  0x00000003 /* RUP */
     .word  0x00000001 /* RTZ */
     /* mask literals +80,+84,+88,+92,+96,+104 */
-    .word (RANDOMX_SCRATCHPAD_L1-8)
-    .word (RANDOMX_SCRATCHPAD_L2-8)
-    .word (RANDOMX_SCRATCHPAD_L3-64)
-    .word (RANDOMX_DATASET_BASE_SIZE-64)
+    .word (/*RANDOMX_SCRATCHPAD_L1*/0) /* filled by JIT compiler */
+    .word (/*RANDOMX_SCRATCHPAD_L2*/0) /* filled by JIT compiler */
+    .word (/*RANDOMX_SCRATCHPAD_L3*/0) /* filled by JIT compiler */
+    .word (/*RANDOMX_DATASET_BASE_SIZE*/0) /* filled by JIT compiler */
     .dword 0x80f0000000000000
     .dword 0x00ffffffffffffff
 DECL(randomx_riscv64_literals_end):

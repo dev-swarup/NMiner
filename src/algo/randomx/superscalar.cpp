@@ -29,15 +29,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "configuration.h"
 #include "program.hpp"
 #include "blake2/endian.h"
-#include <iostream>
-#include <vector>
-#include <algorithm>
-#include <stdexcept>
-#include <iomanip>
 #include "superscalar.hpp"
 #include "intrin_portable.h"
 #include "reciprocal.h"
-#include "common.hpp"
 
 namespace randomx {
 
@@ -202,7 +196,7 @@ namespace randomx {
 		int latency_;
 		int resultOp_ = 0;
 		int dstOp_ = 0;
-		int srcOp_;
+		int srcOp_ = 0;
 
 		SuperscalarInstructionInfo(const char* name)
 			: name_(name), type_(SuperscalarInstructionType::INVALID), latency_(0) {}
@@ -237,7 +231,7 @@ namespace randomx {
 	const SuperscalarInstructionInfo SuperscalarInstructionInfo::IMULH_R = SuperscalarInstructionInfo("IMULH_R", SuperscalarInstructionType::IMULH_R, IMULH_R_ops_array, 1, 0, 1);
 	const SuperscalarInstructionInfo SuperscalarInstructionInfo::ISMULH_R = SuperscalarInstructionInfo("ISMULH_R", SuperscalarInstructionType::ISMULH_R, ISMULH_R_ops_array, 1, 0, 1);
 	const SuperscalarInstructionInfo SuperscalarInstructionInfo::IMUL_RCP = SuperscalarInstructionInfo("IMUL_RCP", SuperscalarInstructionType::IMUL_RCP, IMUL_RCP_ops_array, 1, 1, -1);
-	
+
 	const SuperscalarInstructionInfo SuperscalarInstructionInfo::NOP = SuperscalarInstructionInfo("NOP");
 
 	//these are some of the options how to split a 16-byte window into 3 or 4 x86 instructions.
@@ -288,11 +282,11 @@ namespace randomx {
 			return fetchNextDefault(gen);
 		}
 	private:
-		const char* name_;
-		int index_;
-		const int* counts_;
-		int opsCount_;
-		DecoderBuffer() : index_(-1) {}
+		const char* name_ = nullptr;
+		int index_ = -1;
+		const int* counts_ = nullptr;
+		int opsCount_ = 0;
+		DecoderBuffer() = default;
 		static const DecoderBuffer decodeBuffer484;
 		static const DecoderBuffer decodeBuffer7333;
 		static const DecoderBuffer decodeBuffer3733;
@@ -500,13 +494,13 @@ namespace randomx {
 			// * value must be ready at the required cycle
 			// * cannot be the same as the source register unless the instruction allows it
 			//   - this avoids optimizable instructions such as "xor r, r" or "sub r, r"
-			// * register cannot be multiplied twice in a row unless allowChainedMul is true 
+			// * register cannot be multiplied twice in a row unless allowChainedMul is true
 			//   - this avoids accumulation of trailing zeroes in registers due to excessive multiplication
 			//   - allowChainedMul is set to true if an attempt to find source/destination registers failed (this is quite rare, but prevents a catastrophic failure of the generator)
 			// * either the last instruction applied to the register or its source must be different than this instruction
 			//   - this avoids optimizable instruction sequences such as "xor r1, r2; xor r1, r2" or "ror r, C1; ror r, C2" or "add r, C1; add r, C2"
 			// * register r5 cannot be the destination of the IADD_RS instruction (limitation of the x86 lea instruction)
-			for (unsigned i = 0; i < 8; ++i) {
+			for (int i = 0; i < 8; ++i) {
 				if (registers[i].latency <= cycle && (canReuse_ || i != src_) && (allowChainedMul || opGroup_ != SuperscalarInstructionType::IMUL_R || registers[i].lastOpGroup != SuperscalarInstructionType::IMUL_R) && (registers[i].lastOpGroup != opGroup_ || registers[i].lastOpPar != opGroupPar_) && (info_->getType() != SuperscalarInstructionType::IADD_RS || i != RegisterNeedsDisplacement))
 					availableRegisters.push_back(i);
 			}
@@ -561,10 +555,10 @@ namespace randomx {
 		const SuperscalarInstructionInfo* info_;
 		int src_ = -1;
 		int dst_ = -1;
-		int mod_;
-		uint32_t imm32_;
-		SuperscalarInstructionType opGroup_;
-		int opGroupPar_;
+		int mod_ = 0;
+		uint32_t imm32_ = 0;
+		SuperscalarInstructionType opGroup_ = SuperscalarInstructionType::INVALID;
+		int opGroupPar_ = 0;
 		bool canReuse_ = false;
 		bool groupParIsSource_ = false;
 
@@ -579,7 +573,7 @@ namespace randomx {
 
 	const SuperscalarInstruction SuperscalarInstruction::Null = SuperscalarInstruction(&SuperscalarInstructionInfo::NOP);
 
-	constexpr int CYCLE_MAP_SIZE = RANDOMX_SUPERSCALAR_LATENCY + 4;
+	constexpr int CYCLE_MAP_SIZE = RANDOMX_SUPERSCALAR_MAX_LATENCY + 4;
 	constexpr int LOOK_FORWARD_CYCLES = 4;
 	constexpr int MAX_THROWAWAY_COUNT = 256;
 
@@ -587,7 +581,7 @@ namespace randomx {
 	static int scheduleUop(ExecutionPort::type uop, ExecutionPort::type(&portBusy)[CYCLE_MAP_SIZE][3], int cycle) {
 		//The scheduling here is done optimistically by checking port availability in order P5 -> P0 -> P1 to not overload
 		//port P1 (multiplication) by instructions that can go to any port.
-		for (; cycle < CYCLE_MAP_SIZE; ++cycle) {
+		for (; cycle < static_cast<int>(RandomX_CurrentConfig.SuperscalarLatency) + 4; ++cycle) {
 			if ((uop & ExecutionPort::P5) != 0 && !portBusy[cycle][2]) {
 				if (commit) {
 					if (trace) std::cout << "; P5 at cycle " << cycle << std::endl;
@@ -618,21 +612,21 @@ namespace randomx {
 		//if this macro-op depends on the previous one, increase the starting cycle if needed
 		//this handles an explicit dependency chain in IMUL_RCP
 		if (mop.isDependent()) {
-			cycle = std::max(cycle, depCycle);
+			cycle = (cycle > depCycle) ? cycle : depCycle;
 		}
 		//move instructions are eliminated and don't need an execution unit
 		if (mop.isEliminated()) {
 			if (commit)
 				if (trace) std::cout << "; (eliminated)" << std::endl;
 			return cycle;
-		} 
+		}
 		else if (mop.isSimple()) {
 			//this macro-op has only one uOP
 			return scheduleUop<commit>(mop.getUop1(), portBusy, cycle);
 		}
 		else {
 			//macro-ops with 2 uOPs are scheduled conservatively by requiring both uOPs to execute in the same cycle
-			for (; cycle < CYCLE_MAP_SIZE; ++cycle) {
+			for (; cycle < static_cast<int>(RandomX_CurrentConfig.SuperscalarLatency) + 4; ++cycle) {
 
 				int cycle1 = scheduleUop<false>(mop.getUop1(), portBusy, cycle);
 				int cycle2 = scheduleUop<false>(mop.getUop2(), portBusy, cycle);
@@ -675,21 +669,21 @@ namespace randomx {
 		//Since a decode cycle produces on average 3.45 macro-ops and there are only 3 ALU ports, execution ports are always
 		//saturated first. The cycle limit is present only to guarantee loop termination.
 		//Program size is limited to SuperscalarMaxSize instructions.
-		for (decodeCycle = 0; decodeCycle < RANDOMX_SUPERSCALAR_LATENCY && !portsSaturated && programSize < SuperscalarMaxSize; ++decodeCycle) {
+		for (decodeCycle = 0; decodeCycle < static_cast<int>(RandomX_CurrentConfig.SuperscalarLatency) && !portsSaturated && programSize < 3 * static_cast<int>(RandomX_CurrentConfig.SuperscalarLatency) + 2; ++decodeCycle) {
 
 			//select a decode configuration
 			decodeBuffer = decodeBuffer->fetchNext(currentInstruction.getType(), decodeCycle, mulCount, gen);
 			if (trace) std::cout << "; ------------- fetch cycle " << cycle << " (" << decodeBuffer->getName() << ")" << std::endl;
 
 			int bufferIndex = 0;
-			
+
 			//fill all instruction slots in the current decode buffer
 			while (bufferIndex < decodeBuffer->getSize()) {
 				int topCycle = cycle;
 
 				//if we have issued all macro-ops for the current RandomX instruction, create a new instruction
 				if (macroOpIndex >= currentInstruction.getInfo().getSize()) {
-					if (portsSaturated || programSize >= SuperscalarMaxSize)
+					if (portsSaturated || programSize >= 3 * static_cast<int>(RandomX_CurrentConfig.SuperscalarLatency) + 2)
 						break;
 					//select an instruction so that the first macro-op fits into the current slot
 					currentInstruction.createForSlot(gen, decodeBuffer->getCounts()[bufferIndex], decodeBuffer->getIndex(), decodeBuffer->getSize() == bufferIndex + 1, bufferIndex == 0);
@@ -789,7 +783,7 @@ namespace randomx {
 				macroOpCount++;
 
 				//terminating condition
-				if (scheduleCycle >= RANDOMX_SUPERSCALAR_LATENCY) {
+				if (scheduleCycle >= static_cast<int>(RandomX_CurrentConfig.SuperscalarLatency)) {
 					portsSaturated = true;
 				}
 				cycle = topCycle;
@@ -813,7 +807,7 @@ namespace randomx {
 			Instruction& instr = prog(i);
 			int latDst = prog.asicLatencies[instr.dst] + 1;
 			int latSrc = instr.dst != instr.src ? prog.asicLatencies[instr.src] + 1 : 0;
-			prog.asicLatencies[instr.dst] = std::max(latDst, latSrc);
+			prog.asicLatencies[instr.dst] = (latDst > latSrc) ? latDst : latSrc;
 		}
 
 		//address register is the register with the highest ASIC latency
@@ -837,13 +831,13 @@ namespace randomx {
 		prog.decodeCycles = decodeCycle;
 		prog.ipc = ipc;
 		prog.mulCount = mulCount;
-		
+
 
 		/*if(INFO) std::cout << "; ALU port utilization:" << std::endl;
 		if (INFO) std::cout << "; (* = in use, _ = idle)" << std::endl;
 
 		int portCycles = 0;
-		for (int i = 0; i < CYCLE_MAP_SIZE; ++i) {
+		for (int i = 0; i < RandomX_Config.SuperscalarLatency + 4; ++i) {
 			std::cout << "; " << std::setw(3) << i << " ";
 			for (int j = 0; j < 3; ++j) {
 				std::cout << (portBusy[i][j] ? '*' : '_');
@@ -853,7 +847,7 @@ namespace randomx {
 		}*/
 	}
 
-	void executeSuperscalar(int_reg_t(&r)[8], SuperscalarProgram& prog, std::vector<uint64_t> *reciprocals) {
+	void executeSuperscalar(int_reg_t(&r)[8], SuperscalarProgram& prog) {
 		for (unsigned j = 0; j < prog.getSize(); ++j) {
 			Instruction& instr = prog(j);
 			switch ((SuperscalarInstructionType)instr.opcode)
@@ -871,7 +865,7 @@ namespace randomx {
 				r[instr.dst] *= r[instr.src];
 				break;
 			case SuperscalarInstructionType::IROR_C:
-				r[instr.dst] = rotr(r[instr.dst], instr.getImm32());
+				r[instr.dst] = rotr64(r[instr.dst], instr.getImm32());
 				break;
 			case SuperscalarInstructionType::IADD_C7:
 			case SuperscalarInstructionType::IADD_C8:
@@ -890,10 +884,7 @@ namespace randomx {
 				r[instr.dst] = smulh(r[instr.dst], r[instr.src]);
 				break;
 			case SuperscalarInstructionType::IMUL_RCP:
-				if (reciprocals != nullptr)
-					r[instr.dst] *= (*reciprocals)[instr.getImm32()];
-				else
-					r[instr.dst] *= randomx_reciprocal(instr.getImm32());
+				r[instr.dst] *= randomx_reciprocal(instr.getImm32());
 				break;
 			default:
 				UNREACHABLE;

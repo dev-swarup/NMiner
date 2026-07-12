@@ -31,7 +31,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "soft_aes.h"
 #include "randomx.h"
-#include "blake2/endian.h"
 
 static FORCE_INLINE vuint32m1_t softaes_vector_double(
 	vuint32m1_t in,
@@ -68,20 +67,17 @@ static constexpr uint32_t AES_HASH_1R_XKEY00[8] = { 0xf6fa8389, 0x8b24949f, 0x90
 static constexpr uint32_t AES_HASH_1R_XKEY11[8] = { 0x61b263d1, 0x51f4e03c, 0xee1043c6, 0xed18f99b, 0x61b263d1, 0x51f4e03c, 0xee1043c6, 0xed18f99b };
 
 static constexpr uint32_t AES_HASH_STRIDE_X2[8] = { 0, 4, 8, 12, 32, 36, 40, 44 };
-static constexpr uint32_t AES_HASH_STRIDE_X4[8] = { 12, 8, 4, 0, 76, 72, 68, 64 };
+static constexpr uint32_t AES_HASH_STRIDE_X4[8] = { 0, 4, 8, 12, 64, 68, 72, 76 };
 
-#define lutEnc0 randomx_aes_lut_enc[0]
-#define lutEnc1 randomx_aes_lut_enc[1]
-#define lutEnc2 randomx_aes_lut_enc[2]
-#define lutEnc3 randomx_aes_lut_enc[3]
+#define lutEnc0 lutEnc[0]
+#define lutEnc1 lutEnc[1]
+#define lutEnc2 lutEnc[2]
+#define lutEnc3 lutEnc[3]
 
-#define lutDec0 randomx_aes_lut_dec[0]
-#define lutDec1 randomx_aes_lut_dec[1]
-#define lutDec2 randomx_aes_lut_dec[2]
-#define lutDec3 randomx_aes_lut_dec[3]
-
-#define lutEncIndex randomx_aes_lut_enc_index
-#define lutDecIndex randomx_aes_lut_dec_index
+#define lutDec0 lutDec[0]
+#define lutDec1 lutDec[1]
+#define lutDec2 lutDec[2]
+#define lutDec3 lutDec[3]
 
 void hashAes1Rx4_RVV(const void *input, size_t inputSize, void *hash) {
 	const uint8_t* inptr = (const uint8_t*)input;
@@ -162,27 +158,16 @@ void fillAes1Rx4_RVV(void *state, size_t outputSize, void *buffer) {
 	__riscv_vsuxei32_v_u32m1((uint32_t*)state + 4, stride, state13, 8);
 }
 
-static constexpr uint32_t fillAes4Rx4_Key[] = {
-	0x99e5d23f, 0x2f546d2b, 0xd1833ddb, 0x6421aadd,
-	0xa5dfcde5, 0x06f79d53, 0xb6913f55, 0xb20e3450,
-	0x171c02bf, 0x0aa4679f, 0x515e7baf, 0x5c3ed904,
-	0xd8ded291, 0xcd673785, 0xe78f5d08, 0x85623763,
-	0x229effb4, 0x3d518b6d, 0xe3d6a7a6, 0xb5826f73,
-	0xb272b7d2, 0xe9024d4e, 0x9c10b3d9, 0xc7566bf3,
-	0xf63befa7, 0x2ba9660a, 0xf765a38b, 0xf273c9e7,
-	0xc0b0762d, 0x0c06d1fd, 0x915839de, 0x7a7cd609,
-};
-
 void fillAes4Rx4_RVV(void *state, size_t outputSize, void *buffer) {
 	const uint8_t* outptr = (uint8_t*)buffer;
 	const uint8_t* outputEnd = outptr + outputSize;
 
 	const vuint32m1_t stride4 = __riscv_vle32_v_u32m1(AES_HASH_STRIDE_X4, 8);
 
-	const vuint32m1_t key04 = __riscv_vluxei32_v_u32m1(fillAes4Rx4_Key +  0, stride4, 8);
-	const vuint32m1_t key15 = __riscv_vluxei32_v_u32m1(fillAes4Rx4_Key +  4, stride4, 8);
-	const vuint32m1_t key26 = __riscv_vluxei32_v_u32m1(fillAes4Rx4_Key +  8, stride4, 8);
-	const vuint32m1_t key37 = __riscv_vluxei32_v_u32m1(fillAes4Rx4_Key + 12, stride4, 8);
+	const vuint32m1_t key04 = __riscv_vluxei32_v_u32m1((uint32_t*)(RandomX_CurrentConfig.fillAes4Rx4_Key + 0), stride4, 8);
+	const vuint32m1_t key15 = __riscv_vluxei32_v_u32m1((uint32_t*)(RandomX_CurrentConfig.fillAes4Rx4_Key + 1), stride4, 8);
+	const vuint32m1_t key26 = __riscv_vluxei32_v_u32m1((uint32_t*)(RandomX_CurrentConfig.fillAes4Rx4_Key + 2), stride4, 8);
+	const vuint32m1_t key37 = __riscv_vluxei32_v_u32m1((uint32_t*)(RandomX_CurrentConfig.fillAes4Rx4_Key + 3), stride4, 8);
 
 	const vuint32m1_t stride = __riscv_vle32_v_u32m1(AES_HASH_STRIDE_X2, 8);
 

@@ -1,4 +1,4 @@
-	mov rcx, qword ptr [rsp+16]
+	mov rcx, [rsp+24]
 	mov qword ptr [rcx+0], r8
 	mov qword ptr [rcx+8], r9
 	mov qword ptr [rcx+16], r10
@@ -7,7 +7,7 @@
 	mov qword ptr [rcx+40], r13
 	mov qword ptr [rcx+48], r14
 	mov qword ptr [rcx+56], r15
-	mov rcx, qword ptr [rsp+8]
+	mov rcx, [rsp+16]
 	aesenc xmm0, xmm4
 	aesdec xmm1, xmm4
 	aesenc xmm2, xmm4

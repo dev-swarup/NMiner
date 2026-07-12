@@ -37,44 +37,31 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace randomx {
 
-	template<class Allocator, bool softAes, bool secureJit>
-	class CompiledVm : public VmBase<Allocator, softAes> {
+	template<int softAes>
+	class CompiledVm : public VmBase<softAes>
+	{
 	public:
-		void* operator new(size_t size) {
-			void* ptr = AlignedAllocator<CacheLineSize>::allocMemory(size);
-			if (ptr == nullptr)
-				throw std::bad_alloc();
-			return ptr;
-		}
-		void operator delete(void* ptr) {
-			AlignedAllocator<CacheLineSize>::freeMemory(ptr, sizeof(CompiledVm));
-		}
-		explicit CompiledVm(randomx_flags flags);
+		inline CompiledVm() {}
+		void* operator new(size_t, void* ptr) { return ptr; }
+		void operator delete(void*) {}
+
 		void setDataset(randomx_dataset* dataset) override;
 		void run(void* seed) override;
 
-		void setFlagV2() override { randomx_vm::setFlagV2(); compiler.setFlags(randomx_vm::getFlags()); }
-		void clearFlagV2() override { randomx_vm::clearFlagV2(); compiler.setFlags(randomx_vm::getFlags()); }
+		using VmBase<softAes>::mem;
+		using VmBase<softAes>::program;
+		using VmBase<softAes>::config;
+		using VmBase<softAes>::reg;
+		using VmBase<softAes>::scratchpad;
+		using VmBase<softAes>::datasetPtr;
+		using VmBase<softAes>::datasetOffset;
 
-		using VmBase<Allocator, softAes>::mem;
-		using VmBase<Allocator, softAes>::program;
-		using VmBase<Allocator, softAes>::config;
-		using VmBase<Allocator, softAes>::reg;
-		using VmBase<Allocator, softAes>::scratchpad;
-		using VmBase<Allocator, softAes>::datasetPtr;
-		using VmBase<Allocator, softAes>::datasetOffset;
 	protected:
 		void execute();
 
-		JitCompiler compiler;
+		JitCompiler compiler{ true, false };
 	};
 
-	using CompiledVmDefault = CompiledVm<AlignedAllocator<CacheLineSize>, true, false>;
-	using CompiledVmHardAes = CompiledVm<AlignedAllocator<CacheLineSize>, false, false>;
-	using CompiledVmLargePage = CompiledVm<LargePageAllocator, true, false>;
-	using CompiledVmLargePageHardAes = CompiledVm<LargePageAllocator, false, false>;
-	using CompiledVmDefaultSecure = CompiledVm<AlignedAllocator<CacheLineSize>, true, true>;
-	using CompiledVmHardAesSecure = CompiledVm<AlignedAllocator<CacheLineSize>, false, true>;
-	using CompiledVmLargePageSecure = CompiledVm<LargePageAllocator, true, true>;
-	using CompiledVmLargePageHardAesSecure = CompiledVm<LargePageAllocator, false, true>;
+	using CompiledVmDefault = CompiledVm<1>;
+	using CompiledVmHardAes = CompiledVm<0>;
 }

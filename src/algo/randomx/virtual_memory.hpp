@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019, tevador <tevador@gmail.com>
+Copyright (c) 2018-2019, tevador <tevador@gmail.com>
 
 All rights reserved.
 
@@ -28,29 +28,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
 
-namespace randomx {
+#include <cstddef>
 
-	class Cpu {
-	public:
-		Cpu();
-
-		inline bool hasAes() const { return aes_; }
-		inline bool hasSsse3() const { return ssse3_; }
-		inline bool hasAvx2() const { return avx2_; }
-#ifdef __riscv
-		inline bool hasRVV() const { return rvv_; }
-		inline int getRVV_Length() const { return rvv_length; }
-#endif
-
-	private:
-		bool aes_ = false;
-		bool ssse3_ = false;
-		bool avx2_ = false;
-#ifdef __riscv
-		bool rvv_ = false;
-		int rvv_length = 0;
-#endif
-	};
-
-	extern const Cpu cpu;
-}
+void* allocExecutableMemory(std::size_t, bool);
+void* allocLargePagesMemory(std::size_t);
+void freePagedMemory(void*, std::size_t);

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2018-2019, tevador <tevador@gmail.com>
+ * Copyright 2018-2019, tevador    <tevador@gmail.com>
 
 All rights reserved.
 
@@ -26,23 +26,12 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#pragma once
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#include <stddef.h>
-
-#define alignSize(pos, align) (((pos - 1) / align + 1) * align)
-
-void* allocMemoryPages(size_t);
-void setPagesRW(void*, size_t);
-void setPagesRX(void*, size_t);
-void setPagesRWX(void*, size_t);
-void* allocLargePagesMemory(size_t);
-void freePagedMemory(void*, size_t);
-
-#ifdef __cplusplus
+void randomx_set_huge_pages_jit(bool)
+{
 }
-#endif
+
+
+void randomx_set_optimized_dataset_init(int)
+{
+}
