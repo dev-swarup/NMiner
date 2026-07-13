@@ -1,141 +1,50 @@
-#define VOLATILE_SIG __DATE__ __TIME__ 
-volatile const char* build_sig = VOLATILE_SIG;
-
-#include <thread>
-#include <vector>
+#include <napi.h>
 #include <fstream>
+
+#include "randomx/rx.h"
+#include "randomx/rx_job.h"
 
 #ifdef _WIN32
     #include <windows.h>
 #endif
 
-#include "job.h"
-#include "main.h"
-using namespace randomx;
-
-Napi::Object InitFn(const Napi::CallbackInfo &info)
+Napi::Value HugePages(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
-    Napi::Object exports = Napi::Object::New(env);
-    
-    std::shared_ptr<job> m_job = std::make_shared<job>();
-    
-    if (!info[0].IsString() || !info[1].IsNumber() || !info[2].IsFunction())
-    {
-        ThrowError(env, "Expected arguments: mode, threads and submitFn");
-        return exports;
-    };
-
-    m_job->jsSubmit = std::make_shared<Napi::FunctionReference>(std::move(Napi::Persistent(info[2].As<Napi::Function>())));
-    std::string mode = info[0].As<Napi::String>();
-
-    size_t threads = static_cast<size_t>(info[1].As<Napi::Number>().Uint32Value());
-
-    exports.Set("lPages", Napi::Function::New(env, [](const Napi::CallbackInfo &info)
-        {
-            return ToNumber(info.Env(), -1);
-        }));
-
-    exports.Set("hugePages", Napi::Function::New(env, [](const Napi::CallbackInfo &info) {
 #ifdef _WIN32
-        {     
-            LUID luid;
-            HANDLE hToken;
-            TOKEN_PRIVILEGES tp;
-        
-            OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken);
-            LookupPrivilegeValue(NULL, SE_LOCK_MEMORY_NAME, &luid);
-    
-            tp.PrivilegeCount = 1;
-            tp.Privileges[0].Luid = luid;
-            tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-        
-            BOOL res = AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), NULL, NULL);
-        
-            return ToNumber(info.Env(), (res && GetLastError() == ERROR_SUCCESS) ? 0 : -1);
-        };
+    LUID luid;
+    HANDLE hToken;
+    TOKEN_PRIVILEGES tp;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
+        return Napi::Number::New(env, -1);
+
+    LookupPrivilegeValue(nullptr, SE_LOCK_MEMORY_NAME, &luid);
+
+    tp.PrivilegeCount           = 1;
+    tp.Privileges[0].Luid       = luid;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+    const BOOL res = AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr);
+
+    CloseHandle(hToken);
+    return Napi::Number::New(env, (res && GetLastError() == ERROR_SUCCESS) ? 0 : -1);
 #else
-        std::ofstream nr_hugepages("/proc/sys/vm/nr_hugepages");
-        if (!nr_hugepages)
-            return ToNumber(info.Env(), -1);
-        
-        nr_hugepages << 128;
-        return ToNumber(info.Env(), 0);
+    std::ofstream nr_hugepages("/proc/sys/vm/nr_hugepages");
+    if (!nr_hugepages)
+        return Napi::Number::New(env, -1);
+
+    nr_hugepages << 128;
+    return Napi::Number::New(env, 0);
 #endif
-    }));
-    
-    exports.Set("job", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info) mutable
-        { 
-            Napi::Env env = info.Env();
-            Napi::Object exports = Napi::Object::New(env);
-            if (info.Length() != 4 || !info[0].IsString() || !info[1].IsString() || !info[2].IsString() || !info[3].IsBoolean())
-            {
-                Napi::ThrowError(env, "Expected arguments: job_id, target, blob and reset nonce");
-                return exports;
-            };
-            
-            m_job->job_id = info[0].As<Napi::String>();
-            exports.Set("diff", ToNumber(env, m_job->setTarget(info[1].As<Napi::String>())));
-            exports.Set("txnCount", ToNumber(env, m_job->setBlob(info[2].As<Napi::String>())));
-
-            if (info[3].As<Napi::Boolean>())
-                m_job->resetNonce();
-
-            return exports; 
-        }));
-
-    exports.Set("start", Napi::Function::New(env, [mode, threads, m_job](const Napi::CallbackInfo &info) 
-        {
-            if (info.Length() > 0)
-                m_job->start(mode, threads);
-            m_job->start();
-        }));
-
-    exports.Set("pause", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &)
-        {
-            m_job->pause();
-        }));
-
-    exports.Set("init", Napi::Function::New(env, [mode, m_job](const Napi::CallbackInfo &info)
-        {
-            Napi::Env env = info.Env();
-            if (info.Length() != 2 || !info[0].IsString() || !info[1].IsNumber())
-            {
-                Napi::ThrowError(env, "Expected arguments: seed_hash and threads");
-                return Napi::Boolean::New(env, false);
-            };
-
-            const std::string &seed_hash = info[0].As<Napi::String>();
-            size_t threads = static_cast<size_t>(info[1].As<Napi::Number>().Uint32Value());
-
-            return Napi::Boolean::New(env, m_job->init(mode, threads, seed_hash));
-        }));
-
-    exports.Set("alloc", Napi::Function::New(env, [mode, m_job](const Napi::CallbackInfo &info)
-        {
-            return Napi::Boolean::New(info.Env(), m_job->alloc(mode)); 
-        }));
-
-    exports.Set("uThreads", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
-        {
-            return ToNumber(info.Env(), m_job->threads());
-        }));
-    
-    exports.Set("hashrate", Napi::Function::New(env, [m_job](const Napi::CallbackInfo &info)
-        {
-            return ToNumber(info.Env(), m_job->hashrate());
-        }));
-    
-    exports.Set("cleanup", Napi::Function::New(env, [m_job](const Napi::CallbackInfo&)
-        {
-            m_job->cleanup();
-        }));                             
-    return exports;
 };
 
 Napi::Object Init(Napi::Env env, Napi::Object exports)
 {
-    exports.Set("init", Napi::Function::New(env, InitFn));
+    Rx::Init(env, exports);
+    RxJob::Init(env, exports);
+
+    exports.Set("hugePages", Napi::Function::New(env, HugePages));
     return exports;
 };
 

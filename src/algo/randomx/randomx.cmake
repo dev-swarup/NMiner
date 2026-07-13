@@ -2,6 +2,7 @@ set(RANDOMX_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/src/algo/randomx" CACHE STRING 
 
 list(APPEND SOURCES
     ${RANDOMX_INCLUDE}/rx.cpp
+    ${RANDOMX_INCLUDE}/rx_job.cpp
     ${RANDOMX_INCLUDE}/aes_hash.cpp
     ${RANDOMX_INCLUDE}/argon2_ref.c
     ${RANDOMX_INCLUDE}/argon2_ssse3.c
