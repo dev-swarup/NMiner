@@ -1,4 +1,5 @@
 #include "rx.h"
+#include "rx_worker.h"
 
 #ifdef _WIN32
     #ifndef WIN32_LEAN_AND_MEAN
@@ -76,7 +77,7 @@ static void FreeNuma(uint8_t* ptr, size_t size)
 #endif
 };
 
-static randomx_flags build_flags(randomx_mode mode)
+randomx_flags build_flags(randomx_mode mode)
 {
     uint32_t flags = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_JIT;
 
@@ -92,7 +93,7 @@ static randomx_flags build_flags(randomx_mode mode)
     return (randomx_flags)flags;
 };
 
-static randomx_flags build_cache_flags()
+randomx_flags build_cache_flags()
 {
     uint32_t flags = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_JIT;
 
@@ -108,7 +109,8 @@ static randomx_flags build_cache_flags()
 Napi::Object Rx::Init(Napi::Env env, Napi::Object exports)
 {
     Napi::Function Fn = DefineClass(env, "Rx", {
-        InstanceMethod("allocate", &Rx::allocate)
+        InstanceMethod("allocate", &Rx::allocate),
+        InstanceMethod("reallocate", &Rx::reallocate)
     });
 
     exports.Set("Rx", Fn);
@@ -120,7 +122,7 @@ Rx::Rx(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Rx>(info), cache(nullp
     Napi::Env env = info.Env();
     if (info.Length() < 2 || !info[0].IsString() || !info[1].IsString()) 
     {
-        Napi::Error::New(env, "Expected variant and mode ('FAST' or 'SLOW') as arguments").ThrowAsJavaScriptException();
+        Napi::Error::New(env, "Expected variant and mode ('FAST' or 'LIGHT') as arguments").ThrowAsJavaScriptException();
         return;
     };
 
@@ -139,7 +141,7 @@ Rx::Rx(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Rx>(info), cache(nullp
         return;
     };
 
-    m_mode = (info[1].As<Napi::String>().Utf8Value() == "FAST") ? RANDOMX_FAST : RANDOMX_SLOW;
+    m_mode = (info[1].As<Napi::String>().Utf8Value() == "FAST") ? RANDOMX_FAST : RANDOMX_LIGHT;
 };
 
 Rx::~Rx()
@@ -157,21 +159,6 @@ Napi::Value Rx::allocate(const Napi::CallbackInfo& info)
         return env.Null();
     };
 
-    const randomx_flags flags = build_cache_flags();
-
-    if (!cache) 
-    {
-        cache = randomx_create_cache(flags, nullptr);
-        if (!cache) return Napi::Boolean::New(env, false);
-    };
-
-    if (m_mode == RANDOMX_FAST && !dataset) 
-    {
-        dataset = randomx_alloc_dataset((randomx_flags)(flags | RANDOMX_FLAG_FULL_MEM));
-        if (!dataset) return Napi::Boolean::New(env, false);
-    };
-
-
     std::string seed_hash = info[0].As<Napi::String>().Utf8Value();
 
     {
@@ -179,55 +166,33 @@ Napi::Value Rx::allocate(const Napi::CallbackInfo& info)
         updating = true;
     };
 
-    randomx_init_cache(cache, seed_hash.c_str(), seed_hash.size());
+    AllocateWorker* worker = new AllocateWorker(env, this, seed_hash, "");
 
-    if (m_mode == RANDOMX_FAST)
+    worker->Queue();
+    return worker->GetPromise();
+};
+
+Napi::Value Rx::reallocate(const Napi::CallbackInfo& info)
+{
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsString()) 
     {
-        int threads_count = std::thread::hardware_concurrency();
-        const uint64_t dataset_count = randomx_dataset_item_count();
-
-        if (threads_count > 1)
-        {
-            std::vector<std::thread> threads;
-            threads.reserve(threads_count);
-
-            for (uint32_t i = 0; i < threads_count; ++i)
-            {
-                const uint32_t start = static_cast<uint32_t>((dataset_count * i) / threads_count);
-                const uint32_t end   = static_cast<uint32_t>((dataset_count * (i + 1)) / threads_count);
-                const uint32_t size  = end - start;
-
-                threads.emplace_back([this, start, size]()
-                {
-                    if (size % 5)
-                    {
-                        randomx_init_dataset(dataset, cache, start, size - (size % 5));
-                        randomx_init_dataset(dataset, cache, start + size - 5, 5);
-                    }
-                    else
-                    {
-                        randomx_init_dataset(dataset, cache, start, size);
-                    };
-                });
-            }
-
-            for (auto &t : threads) 
-            {
-                if (t.joinable()) t.join();
-            };
-        }
-        else
-        {
-            randomx_init_dataset(dataset, cache, 0, dataset_count);
-        };
+        Napi::Error::New(env, "Expected seed_hash").ThrowAsJavaScriptException();
+        return env.Null();
     };
+
+    std::string seed_hash = info[0].As<Napi::String>().Utf8Value();
+    std::string variant = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : "";
 
     {
         std::lock_guard<std::mutex> lock(mutex);
-        updating = false;
+        updating = true;
     };
 
-    return Napi::Boolean::New(env, true);
+    AllocateWorker* worker = new AllocateWorker(env, this, seed_hash, variant);
+    
+    worker->Queue();
+    return worker->GetPromise();
 };
 
 randomx_numa::~randomx_numa()
