@@ -162,7 +162,11 @@ private:
     hwloc_topology_t topology = nullptr;
 #endif
     std::atomic<bool> m_active {false};
+    std::atomic<bool> m_paused {false};
     std::vector<std::thread> m_threads;
+
+    std::mutex m_cv_mutex;
+    std::condition_variable m_cv;
 
     std::mutex m_job_mutex;
     std::atomic<uint32_t> m_job_version {0};

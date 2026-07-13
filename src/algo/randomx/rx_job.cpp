@@ -149,18 +149,29 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo& info)
         m_job_version.fetch_add(1, std::memory_order_release);
     };
 
+    m_cv.notify_all();
     return exports;
 };
 
 Napi::Value RxJob::Start(const Napi::CallbackInfo& info)
 {
     Napi::Env env = info.Env();
-    if (m_active.load()) return env.Undefined();
+    if (m_active.load(std::memory_order_relaxed)) 
+    {
+        if (m_paused.load(std::memory_order_relaxed)) 
+        {
+            m_paused.store(false, std::memory_order_relaxed);
+            m_cv.notify_all();
+        };
+
+        return env.Undefined();
+    };
 
     uint32_t thread_count = 0;
     if (info.Length() > 0 && info[0].IsNumber()) thread_count = info[0].As<Napi::Number>().Uint32Value();
 
-    m_active.store(true);
+    m_active.store(true, std::memory_order_relaxed);
+    m_paused.store(false, std::memory_order_relaxed);
 
 #ifdef HAVE_HWLOC
     int num_pus = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
@@ -190,7 +201,9 @@ Napi::Value RxJob::Start(const Napi::CallbackInfo& info)
 
 Napi::Value RxJob::Pause(const Napi::CallbackInfo& info)
 {
-    
+    m_paused.store(true, std::memory_order_relaxed);
+    m_cv.notify_all();
+
     return info.Env().Undefined();
 };
 
@@ -202,7 +215,8 @@ Napi::Value RxJob::Stop(const Napi::CallbackInfo& info)
 
 void RxJob::StopLoop()
 {
-    m_active.store(false);
+    m_active.store(false, std::memory_order_relaxed);
+    m_cv.notify_all();
 
     for (auto& t : m_threads) 
     {
@@ -297,9 +311,42 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
             is_first = true; 
         };
 
-        if (local_size == 0)
+        if (m_paused.load(std::memory_order_relaxed) || local_size == 0) 
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            if (!is_first && local_size > 0) 
+            {
+                uint8_t hash[RANDOMX_HASH_SIZE];
+                randomx_calculate_hash_last(vm->vm, hash);
+                uint64_t hash64 = readUnaligned(reinterpret_cast<uint64_t*>(hash + 24));
+                if (hash64 <= local_target) 
+                {
+                    char hex_nonce[9];
+                    bin2hex(hex_nonce, sizeof(hex_nonce), local_blob + kNonceOffset, 4);
+                    
+                    char hex_hash[65];
+                    bin2hex(hex_hash, sizeof(hex_hash), hash, 32);
+                    
+                    SubmitData* data = new SubmitData();
+                    data->nonce = hex_nonce;
+                    data->result = hex_hash;
+                    data->job_id = local_job_id;
+
+                    tsfn.BlockingCall(data, [](Napi::Env env, Napi::Function jsSubmit, SubmitData* data) 
+                    {
+                        jsSubmit.Call({ Napi::String::New(env, data->job_id), Napi::String::New(env, data->nonce), Napi::String::New(env, data->result) });
+                        delete data;
+                    });
+                };
+
+                is_first = true;
+            };
+
+            std::unique_lock<std::mutex> cv_lock(m_cv_mutex);
+            m_cv.wait_for(cv_lock, std::chrono::milliseconds(100), [this, local_version]() 
+            {
+                return !m_active.load(std::memory_order_relaxed) || rx->updating.load(std::memory_order_acquire) || (!m_paused.load(std::memory_order_relaxed) && (m_size > 0 || m_job_version.load(std::memory_order_acquire) != local_version));
+            });
+
             continue;
         };
 
