@@ -94,7 +94,6 @@ else()
         add_flag("-O3")
         add_flag("-flto")
         add_flag("-funroll-loops")
-        add_flag("-fno-exceptions")
     endif()
 endif()
 
