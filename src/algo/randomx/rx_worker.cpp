@@ -14,6 +14,11 @@ AllocateWorker::~AllocateWorker()
 
 void AllocateWorker::Execute() 
 {
+    while (rx->active_vms.load(std::memory_order_acquire) > 0) 
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    };
+
     if (rx->cache || rx->dataset)
     {
         if (rx->dataset) randomx_release_dataset(rx->dataset);

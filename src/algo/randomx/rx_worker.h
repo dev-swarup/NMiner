@@ -1,5 +1,6 @@
 #pragma once
 #include "rx.h"
+#include "rx_job.h"
 
 class AllocateWorker : public Napi::AsyncWorker {
 public:

@@ -106,6 +106,30 @@ randomx_flags build_cache_flags()
     return (randomx_flags)flags;
 };
 
+randomx_numa::randomx_numa(uint8_t* s, randomx_vm* v, std::atomic<int>* counter = nullptr)  : scratchpad(s), vm(v), active_vms_ptr(counter)
+{
+    if (active_vms_ptr) active_vms_ptr->fetch_add(1, std::memory_order_relaxed);
+};
+
+randomx_numa::~randomx_numa()
+{
+    if (vm) 
+    {
+        randomx_destroy_vm(vm);
+        vm = nullptr;
+    };
+
+    if (scratchpad)
+    {
+        size_t l3_size = RandomX_CurrentConfig.ScratchpadL3_Size;
+        FreeNuma(scratchpad, l3_size == 0 ? 2097152 : l3_size);
+
+        scratchpad = nullptr;
+    };
+
+    if (active_vms_ptr) active_vms_ptr->fetch_sub(1, std::memory_order_relaxed);
+};
+
 Napi::Object Rx::Init(Napi::Env env, Napi::Object exports)
 {
     Napi::Function Fn = DefineClass(env, "Rx", {
@@ -195,33 +219,18 @@ Napi::Value Rx::reallocate(const Napi::CallbackInfo& info)
     return worker->GetPromise();
 };
 
-randomx_numa::~randomx_numa()
-{
-    if (vm) 
-    {
-        randomx_destroy_vm(vm);
-        vm = nullptr;
-    };
-
-    if (scratchpad)
-    {
-        size_t l3_size = RandomX_CurrentConfig.ScratchpadL3_Size;
-        FreeNuma(scratchpad, l3_size == 0 ? 2097152 : l3_size);
-
-        scratchpad = nullptr;
-    };
-};
-
 std::shared_ptr<randomx_numa> Rx::create_vm(uint32_t numa_node)
 {
     if (!cache || (m_mode == RANDOMX_FAST && !dataset)) 
         return nullptr;
 
     size_t l3_size = RandomX_CurrentConfig.ScratchpadL3_Size;
-    uint8_t *scratchpad = AllocateNuma(l3_size == 0 ? 2097152 : l3_size, numa_node);
+    uint8_t* scratchpad = AllocateNuma(l3_size == 0 ? 2097152 : l3_size, numa_node);
+    if (!scratchpad) return nullptr;
 
     randomx_flags flags = build_flags(m_mode);
-    randomx_vm* vm = randomx_create_vm(flags, cache, dataset, scratchpad, numa_node);
+    randomx_vm *vm = randomx_create_vm(flags, cache, dataset, scratchpad, numa_node);
 
-    return std::make_shared<randomx_numa>(scratchpad, vm);
+    if (vm) return std::make_shared<randomx_numa>(scratchpad, vm, &active_vms);
+    return nullptr;
 };

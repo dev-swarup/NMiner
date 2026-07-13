@@ -23,8 +23,9 @@ struct randomx_numa
 {
     uint8_t *scratchpad {nullptr};
     randomx_vm *vm {nullptr};
+    std::atomic<int>* active_vms_ptr {nullptr};
 
-    randomx_numa(uint8_t* s, randomx_vm* v) : scratchpad(s), vm(v) {}
+    randomx_numa(uint8_t* s, randomx_vm* v, std::atomic<int>* counter);
     ~randomx_numa();
 };
 
@@ -43,6 +44,7 @@ public:
     randomx_cache *cache;
     randomx_dataset *dataset;
     std::atomic<bool> updating;
+    std::atomic<int> active_vms {0};
 
     std::shared_ptr<randomx_numa> create_vm(uint32_t numa_node);
 };

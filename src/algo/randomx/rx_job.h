@@ -132,6 +132,12 @@ inline constexpr size_t kMaxBlobSize = 408;
 
 #include "rx.h"
 
+struct SubmitData {
+    std::string job_id;
+    std::string nonce;
+    std::string result;
+};
+
 class RxJob : public Napi::ObjectWrap<RxJob>
 {
 public:
@@ -158,6 +164,10 @@ private:
     std::atomic<bool> m_active {false};
     std::vector<std::thread> m_threads;
 
+    std::mutex m_job_mutex;
+    std::atomic<uint32_t> m_job_version {0};
+    std::atomic<uint32_t> m_nonce_counter {0};
+
     uint8_t m_blob[kMaxBlobSize]{};
     size_t  m_size    = 0;
     bool    m_nicehash = false;
@@ -165,5 +175,5 @@ private:
     uint64_t m_diff   = 0;
     uint64_t m_target = 0;
 
-    std::string job_id;
+    std::string m_job_id;
 };
