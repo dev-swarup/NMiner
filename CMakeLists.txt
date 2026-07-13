@@ -98,10 +98,15 @@ else()
     endif()
 endif()
 
-add_subdirectory(3dparty)
+add_subdirectory(3rdparty/hwloc)
+include_directories(3rdparty/hwloc/include)
 
 add_library(${CMAKE_PROJECT_NAME} SHARED ${SOURCES} ${CMAKE_JS_SRC})
-target_link_libraries(${CMAKE_PROJECT_NAME} ${CMAKE_JS_LIB} hwloc::hwloc)
+target_link_libraries(${CMAKE_PROJECT_NAME} ${CMAKE_JS_LIB} hwloc)
+
+if(WIN32)
+    target_link_libraries(${CMAKE_PROJECT_NAME} Advapi32 Setupapi)
+endif()
 
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES PREFIX "" SUFFIX ".node")
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NAPI_DISABLE_CPP_EXCEPTIONS)
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NAPI_DISABLE_CPP_EXCEPTIONS HAVE_HWLOC=1)
