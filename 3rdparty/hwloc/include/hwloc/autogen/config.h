@@ -29,6 +29,7 @@
 #define __hwloc_attribute_warn_unused_result
 
 /* Defined to 1 if you have the `windows.h' header. */
+#ifdef _WIN32
 #define HWLOC_HAVE_WINDOWS_H 1
 #define hwloc_pid_t HANDLE
 #define hwloc_thread_t HANDLE
@@ -36,6 +37,14 @@
 #include <windows.h>
 #include <BaseTsd.h>
 typedef DWORDLONG hwloc_uint64_t;
+#else
+#include <sys/types.h>
+#include <stdint.h>
+#include <pthread.h>
+#define hwloc_pid_t pid_t
+#define hwloc_thread_t pthread_t
+typedef uint64_t hwloc_uint64_t;
+#endif
 
 #if defined( _USRDLL ) /* dynamic linkage */
 #if defined( DECLSPEC_EXPORTS )
