@@ -10,3 +10,10 @@ build*/
 .vscode
 node_modules/
 package-lock.json
+
+index.js
+index.d.ts
+src/js/*.js
+src/js/*.d.ts
+
+!src/js/miner.d.ts
