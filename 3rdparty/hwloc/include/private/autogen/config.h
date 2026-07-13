@@ -85,7 +85,7 @@
 
 /* Define to 1 if you have the declaration of `strcasecmp', and to 0 if you
    don't. */
-/* #undef HWLOC_HAVE_DECL_STRCASECMP */
+#define HWLOC_HAVE_DECL_STRCASECMP 1
 
 /* Define to 1 if you have the declaration of `snprintf', and to 0 if you
    don't. */
@@ -285,6 +285,7 @@
 
 /* Define to 1 if you have the `strncasecmp' function. */
 #define HAVE_STRNCASECMP 1
+#define HWLOC_HAVE_DECL_STRNCASECMP 1
 
 /* Define to '1' if sysctl is present and usable */
 /* #undef HAVE_SYSCTL */
@@ -506,7 +507,9 @@
 /* #undef HWLOC_HAVE_PTHREAD_GETTHRDS_NP */
 
 /* Define to 1 if pthread mutexes are available */
-/* #undef HWLOC_HAVE_PTHREAD_MUTEX */
+#ifdef __linux__
+#define HWLOC_HAVE_PTHREAD_MUTEX 1
+#endif
 
 /* Define to 1 if glibc provides a prototype of sched_setaffinity() */
 #define HWLOC_HAVE_SCHED_SETAFFINITY 1
@@ -669,7 +672,9 @@
 #endif
 
 /* Define this to either strncasecmp or strncmp */
+#ifdef _WIN32
 #define hwloc_strncasecmp strncasecmp
+#endif
 
 /* Define this to the thread ID type */
 #ifdef _WIN32
