@@ -15,7 +15,9 @@
 
 #define DECLSPEC_EXPORTS
 
+#ifdef _WIN32
 #define HWLOC_HAVE_MSVC_CPUIDEX 1
+#endif
 
 /* Define to 1 if the system has the type `CACHE_DESCRIPTOR'. */
 #define HAVE_CACHE_DESCRIPTOR 0
@@ -85,7 +87,9 @@
 
 /* Define to 1 if you have the declaration of `strcasecmp', and to 0 if you
    don't. */
+#ifndef _WIN32
 #define HWLOC_HAVE_DECL_STRCASECMP 1
+#endif
 
 /* Define to 1 if you have the declaration of `snprintf', and to 0 if you
    don't. */
@@ -128,8 +132,9 @@
 #define HAVE_DECL__SC_PAGE_SIZE 0
 
 /* Define to 1 if you have the <dirent.h> header file. */
-/* #define HAVE_DIRENT_H 1 */
-#undef HAVE_DIRENT_H
+#ifndef _WIN32
+#define HAVE_DIRENT_H 1
+#endif
 
 /* Define to 1 if you have the <dlfcn.h> header file. */
 /* #undef HAVE_DLFCN_H */
@@ -284,8 +289,10 @@
 #define HAVE_STRING_H 1
 
 /* Define to 1 if you have the `strncasecmp' function. */
+#ifndef _WIN32
 #define HAVE_STRNCASECMP 1
 #define HWLOC_HAVE_DECL_STRNCASECMP 1
+#endif
 
 /* Define to '1' if sysctl is present and usable */
 /* #undef HAVE_SYSCTL */
@@ -326,8 +333,9 @@
 /* #undef HAVE_UNAME */
 
 /* Define to 1 if you have the <unistd.h> header file. */
-/* #define HAVE_UNISTD_H 1 */
-#undef HAVE_UNISTD_H
+#ifndef _WIN32
+#define HAVE_UNISTD_H 1
+#endif
 
 /* Define to 1 if you have the `uselocale' function. */
 /* #undef HAVE_USELOCALE */
