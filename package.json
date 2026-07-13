@@ -6,7 +6,7 @@
     "description": "NMiner is a silent, high performance, open source, cross platform RandomX CPU miner. Official binaries are available for Windows and Linux.",
     "scripts": {
         "tsc": "tsc",
-        "build": "tsc && cmake-js -p${nproc} compile"
+        "build": "cmake-js -p${nproc} compile"
     },
     "dependencies": {
         "ws": "^8.19.0",
@@ -41,6 +41,7 @@
         "index.js",
         "bin/*.node",
         "index.d.ts",
-        "src/js/*.js"
+        "src/js/*.js",
+        "src/js/*.d.ts"
     ]
 }

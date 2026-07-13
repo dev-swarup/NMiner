@@ -39,9 +39,7 @@ jobs:
       - name: Install & Build
         run: |
           npm install --ignore-scripts
-          npm run tsc
-
-          mkdir -p build && cmake-js -p${nproc} compile
+          npm run build
 
       - if: matrix.config.name == 'linux'
         name: Strip debug symbols
@@ -92,8 +90,8 @@ jobs:
           cp temp/addon-linux-node22/NMiner.node ./bin/nminer-linux-node22.node
           cp temp/addon-linux-node24/NMiner.node ./bin/nminer-linux-node24.node
 
-          zip -r nminer-win32.zip bin/nminer-win32.node src/js/*.js index.js index.d.ts package.json LICENSE
-          tar -czvf nminer-linux.tar.gz bin/nminer-linux-node*.node src/js/*.js index.js index.d.ts package.json LICENSE
+          zip -r nminer-win32.zip bin/nminer-win32.node src/js/*.js index.js index.d.ts src/js/*.d.ts package.json LICENSE
+          tar -czvf nminer-linux.tar.gz bin/nminer-linux-node*.node src/js/*.js index.js index.d.ts src/js/*.d.ts package.json LICENSE
 
       - name: Publish to NPM
         run: npm publish --access public
