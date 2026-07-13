@@ -1,14 +1,14 @@
-const os = require("node:os");
-const path = require("node:path");
-const options = { threads: Math.round(os.cpus().length * 0.8), mode: os.freemem() > (1024 * 1024 * 1024 * 2) ? "FAST" : "LIGHT" };
+const { join } = require("path");
+const { existsSync } = require("fs");
 
-module.exports.init = (mode, threads, submitFn) => {
-    options.mode = mode == "LIGHT" ? mode : options.mode;
-    options.threads = typeof threads == "number" ? threads : options.threads;
+try {
+    let path = join(__dirname, "..", "..", "bin", `nminer-${process.platform}${process.platform == "linux" ? `-node${process.versions.node.split(".")[0]}` : ""}.node`);
 
-    try { return { ...require(path.join(__dirname, "..", "..", "bin", `nminer-${process.platform}.node`)).init(options.mode, options.threads, submitFn), ...options }; } catch (err) {
-        try {
-            return { ...require("../../build/Release/NMiner.node").init(options.mode, options.threads, submitFn), ...options };
-        } catch { };
+    if (!existsSync(path)) {
+        path = join(__dirname, "..", "..", "build", "Release", "NMiner.node");
+
+        if (!existsSync(path)) throw new Error(`[NMiner] Native addon binaries not found.\nPlease compile the project or ensure the pre-built binaries exist.\n`);
     };
-};
+
+    module.exports = require(path);
+} catch (err) { throw new Error(`[NMiner] Failed to load the native addon.\nReason: ${err.message}\n\nSystem: ${process.platform} ${process.arch} (Node.js ${process.version})\n`); };
