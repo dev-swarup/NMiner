@@ -20,7 +20,8 @@ export class RxJob {
 
     public stop(): void;
     public pause(): void;
-    public start(threads?: number[]): void;
+    public start(threads?: number): void;
+    public throttle(threads: number, ms: number): void;
     
     public get_hashes(): number;
     public send_job(blob: Buffer, diff: Buffer, reset_nonce: boolean): JobResult;

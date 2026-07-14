@@ -52,6 +52,7 @@ public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports);
 
     Napi::Value GetHashes(const Napi::CallbackInfo& info);
+    Napi::Value Throttle(const Napi::CallbackInfo& info);
     Napi::Value SendJob(const Napi::CallbackInfo& info);
     Napi::Value Start(const Napi::CallbackInfo& info);
     Napi::Value Pause(const Napi::CallbackInfo& info);
@@ -78,6 +79,9 @@ private:
     std::atomic<uint32_t> m_job_version {0};
     std::atomic<uint32_t> m_nonce_counter {0};
     std::atomic<uint64_t> m_hashes_calculated {0};
+
+    std::atomic<uint32_t> m_throttle_time {0};
+    std::atomic<uint32_t> m_throttle_count {0};
 
     uint8_t m_blob[kMaxBlobSize]{};
     size_t  m_size    = 0;

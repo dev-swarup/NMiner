@@ -44,6 +44,7 @@ Napi::Object RxJob::Init(Napi::Env env, Napi::Object exports)
 {
     Napi::Function Fn = DefineClass(env, "RxJob", {
         InstanceMethod("get_hashes", &RxJob::GetHashes),
+        InstanceMethod("throttle", &RxJob::Throttle),
         InstanceMethod("send_job", &RxJob::SendJob),
         InstanceMethod("start", &RxJob::Start),
         InstanceMethod("pause", &RxJob::Pause),
@@ -52,6 +53,24 @@ Napi::Object RxJob::Init(Napi::Env env, Napi::Object exports)
 
     exports.Set("RxJob", Fn);
     return exports;
+};
+
+Napi::Value RxJob::Throttle(const Napi::CallbackInfo& info)
+{
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsNumber())
+    {
+        Napi::Error::New(env, "Expected threads and time in milliseconds").ThrowAsJavaScriptException();
+        return env.Null();
+    };
+
+    uint32_t threads = info[0].As<Napi::Number>().Uint32Value();
+    uint32_t time_ms = info[1].As<Napi::Number>().Uint32Value();
+
+    m_throttle_time.store(time_ms, std::memory_order_relaxed);
+    m_throttle_count.fetch_add(threads, std::memory_order_relaxed);
+
+    return env.Undefined();
 };
 
 Napi::Value RxJob::SendJob(const Napi::CallbackInfo& info)
@@ -384,6 +403,17 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
         };
 
         memcpy(local_blob, next_blob, local_size);
+
+        uint32_t throttle_count = m_throttle_count.load(std::memory_order_relaxed);
+        while (throttle_count > 0)
+        {
+            if (m_throttle_count.compare_exchange_weak(throttle_count, throttle_count - 1, std::memory_order_relaxed)) 
+            {
+                uint32_t time = m_throttle_time.load(std::memory_order_relaxed);
+                std::this_thread::sleep_for(std::chrono::milliseconds(time));
+                break;
+            };
+        };
     };
 
     if (!is_first && local_size > 0) 
