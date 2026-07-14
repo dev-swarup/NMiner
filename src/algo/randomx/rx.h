@@ -6,6 +6,7 @@
 
 #include <napi.h>
 #include "randomx.h"
+#include "configuration.h"
 
 #ifdef HAVE_HWLOC
     #include <hwloc.h>
@@ -15,6 +16,8 @@ typedef enum {
     RANDOMX_LIGHT = 0,
     RANDOMX_FAST = 1,
 } randomx_mode;
+
+bool LargePagesSupported();
 
 randomx_flags build_flags(randomx_mode mode);
 randomx_flags build_cache_flags();

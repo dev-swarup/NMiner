@@ -28,24 +28,21 @@ void AllocateWorker::Execute()
     if (!variant.empty()) 
     {
         if (variant == "rx/0" || variant == "rx/monero")
-            randomx_apply_config(RandomX_MoneroConfig);
-        else if (variant == "rx/wow") randomx_apply_config(RandomX_WowneroConfig);
-        else if (variant == "rx/arq") randomx_apply_config(RandomX_ArqmaConfig);
-        else if (variant == "rx/sfx") randomx_apply_config(RandomX_SafexConfig);
-        else if (variant == "rx/yada") randomx_apply_config(RandomX_YadaConfig);
-        else if (variant == "rx/graft") randomx_apply_config(RandomX_GraftConfig);
-        else 
+        {
+
+        }
+        else
         {
             SetError("Invalid variant");
             return;
         };
     };
 
-    const randomx_flags flags = build_cache_flags();
+    randomx_flags flags = build_cache_flags();
 
     if (!rx->cache) 
     {
-        rx->cache = randomx_create_cache(flags, nullptr);
+        rx->cache = randomx_alloc_cache(flags);
         if (!rx->cache) 
         { 
             SetError("Failed to allocate rx cache"); 
@@ -54,7 +51,12 @@ void AllocateWorker::Execute()
     };
 
     if (rx->m_mode == RANDOMX_FAST && !rx->dataset) {
-        rx->dataset = randomx_alloc_dataset((randomx_flags)(flags | RANDOMX_FLAG_FULL_MEM));
+        randomx_flags dataset_flags = (randomx_flags)RANDOMX_FLAG_FULL_MEM;
+        
+        if (LargePagesSupported())
+            dataset_flags = (randomx_flags)(dataset_flags | RANDOMX_FLAG_LARGE_PAGES);
+
+        rx->dataset = randomx_alloc_dataset(dataset_flags);
         if (!rx->dataset)
         { 
             SetError("Failed to allocate rx dataset"); 
@@ -62,7 +64,14 @@ void AllocateWorker::Execute()
         };
     };
 
-    randomx_init_cache(rx->cache, seed_hash.c_str(), seed_hash.size());
+    uint8_t m_seed[kMaxSeedSize];
+    if (hex2bin(m_seed, sizeof(m_seed), seed_hash.c_str(), seed_hash.size(), nullptr, nullptr, nullptr) != 0)
+    {
+        SetError("Failed to decode seed hash");
+        return;
+    };
+
+    randomx_init_cache(rx->cache, m_seed, sizeof(m_seed));
 
     if (rx->m_mode == RANDOMX_FAST) 
     {

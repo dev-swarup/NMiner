@@ -55,6 +55,7 @@ RxJob::~RxJob()
 Napi::Object RxJob::Init(Napi::Env env, Napi::Object exports)
 {
     Napi::Function Fn = DefineClass(env, "RxJob", {
+        InstanceMethod("get_hashes", &RxJob::GetHashes),
         InstanceMethod("send_job", &RxJob::SendJob),
         InstanceMethod("start", &RxJob::Start),
         InstanceMethod("pause", &RxJob::Pause),
@@ -213,6 +214,11 @@ Napi::Value RxJob::Stop(const Napi::CallbackInfo& info)
     return info.Env().Undefined();
 };
 
+Napi::Value RxJob::GetHashes(const Napi::CallbackInfo& info)
+{
+    return Napi::Number::New(info.Env(), m_hashes_calculated.load(std::memory_order_relaxed));
+};
+
 void RxJob::StopLoop()
 {
     m_active.store(false, std::memory_order_relaxed);
@@ -357,7 +363,7 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
             if (m_nicehash) 
             {
                 uint32_t current_nonce = readUnaligned(reinterpret_cast<uint32_t*>(local_blob + kNonceOffset));
-                current_nonce = (current_nonce & 0x000000FF) | (nonce << 8);
+                current_nonce = (current_nonce & 0xFF000000) | (nonce & 0x00FFFFFF);
 
                 writeUnaligned(reinterpret_cast<uint32_t*>(local_blob + kNonceOffset), current_nonce);
             } 
@@ -376,7 +382,7 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
         if (m_nicehash) 
         {
             uint32_t current_nonce = readUnaligned(reinterpret_cast<uint32_t*>(next_blob + kNonceOffset));
-            current_nonce = (current_nonce & 0x000000FF) | (nonce << 8);
+            current_nonce = (current_nonce & 0xFF000000) | (nonce & 0x00FFFFFF);
 
             writeUnaligned(reinterpret_cast<uint32_t*>(next_blob + kNonceOffset), current_nonce);
         } 
@@ -387,6 +393,8 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
 
         uint8_t hash[RANDOMX_HASH_SIZE];
         randomx_calculate_hash_next(vm->vm, next_blob, local_size, hash);
+        
+        m_hashes_calculated.fetch_add(1, std::memory_order_relaxed);
 
         uint64_t hash64 = readUnaligned(reinterpret_cast<uint64_t*>(hash + 24));
         if (hash64 <= local_target) 

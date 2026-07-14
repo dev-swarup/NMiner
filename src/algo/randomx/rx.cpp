@@ -29,26 +29,6 @@ static bool AESSupport()
     return (cpuInfo[2] & (1u << 25)) != 0;
 };
 
-static bool LargePagesSupport()
-{
-#ifdef _WIN32
-    void *ptr = VirtualAlloc(nullptr, 2u * 1024u * 1024u, MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES, PAGE_READWRITE);
-    if (ptr)
-    { 
-        VirtualFree(ptr, 0, MEM_RELEASE); 
-        return true; 
-    };
-
-    return false;
-#else
-    void *ptr = mmap(nullptr, 2u * 1024u * 1024u, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
-    if (ptr == MAP_FAILED) return false;
-
-    munmap(ptr, 2u * 1024u * 1024u);
-    return true;
-#endif
-};
-
 static uint8_t* AllocateNuma(size_t size, uint32_t numa_node) 
 {
 #ifdef _WIN32
@@ -79,15 +59,15 @@ static void FreeNuma(uint8_t* ptr, size_t size)
 
 randomx_flags build_flags(randomx_mode mode)
 {
-    uint32_t flags = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_JIT;
+    uint32_t flags = RANDOMX_FLAG_JIT;
 
     if (AESSupport())      
         flags |= RANDOMX_FLAG_HARD_AES;
 
     if (mode == RANDOMX_FAST)    
         flags |= RANDOMX_FLAG_FULL_MEM;
-    
-    if (LargePagesSupport())
+
+    if (LargePagesSupported())
         flags |= RANDOMX_FLAG_LARGE_PAGES;
 
     return (randomx_flags)flags;
@@ -95,12 +75,12 @@ randomx_flags build_flags(randomx_mode mode)
 
 randomx_flags build_cache_flags()
 {
-    uint32_t flags = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_JIT;
+    uint32_t flags = RANDOMX_FLAG_JIT | RANDOMX_FLAG_ARGON2;
 
     if (AESSupport())
         flags |= RANDOMX_FLAG_HARD_AES;
 
-    if (LargePagesSupport())
+    if (LargePagesSupported())
         flags |= RANDOMX_FLAG_LARGE_PAGES;
 
     return (randomx_flags)flags;
@@ -121,9 +101,7 @@ randomx_numa::~randomx_numa()
 
     if (scratchpad)
     {
-        size_t l3_size = RandomX_CurrentConfig.ScratchpadL3_Size;
-        FreeNuma(scratchpad, l3_size == 0 ? 2097152 : l3_size);
-
+        FreeNuma(scratchpad, RANDOMX_SCRATCHPAD_L3);
         scratchpad = nullptr;
     };
 
@@ -153,12 +131,9 @@ Rx::Rx(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Rx>(info), cache(nullp
     std::string variant = info[0].As<Napi::String>().Utf8Value();
 
     if (variant == "rx/0" || variant == "rx/monero")
-        randomx_apply_config(RandomX_MoneroConfig);
-    else if (variant == "rx/wow") randomx_apply_config(RandomX_WowneroConfig);
-    else if (variant == "rx/arq") randomx_apply_config(RandomX_ArqmaConfig);
-    else if (variant == "rx/sfx") randomx_apply_config(RandomX_SafexConfig);
-    else if (variant == "rx/yada") randomx_apply_config(RandomX_YadaConfig);
-    else if (variant == "rx/graft") randomx_apply_config(RandomX_GraftConfig);
+    {
+        
+    }
     else 
     {
         Napi::Error::New(env, "Invalid variant").ThrowAsJavaScriptException();
@@ -224,13 +199,9 @@ std::shared_ptr<randomx_numa> Rx::create_vm(uint32_t numa_node)
     if (!cache || (m_mode == RANDOMX_FAST && !dataset)) 
         return nullptr;
 
-    size_t l3_size = RandomX_CurrentConfig.ScratchpadL3_Size;
-    uint8_t* scratchpad = AllocateNuma(l3_size == 0 ? 2097152 : l3_size, numa_node);
-    if (!scratchpad) return nullptr;
-
     randomx_flags flags = build_flags(m_mode);
-    randomx_vm *vm = randomx_create_vm(flags, cache, dataset, scratchpad, numa_node);
+    randomx_vm *vm = randomx_create_vm(flags, cache, dataset);
 
-    if (vm) return std::make_shared<randomx_numa>(scratchpad, vm, &active_vms);
+    if (vm) return std::make_shared<randomx_numa>(nullptr, vm, &active_vms);
     return nullptr;
 };
