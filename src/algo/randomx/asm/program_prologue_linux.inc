@@ -12,7 +12,6 @@
 	mov rcx, rdi
 	mov rbp, qword ptr [rsi]    ;# "mx", "ma"
 	mov rdi, qword ptr [rsi+8]  ;# uint8_t* dataset
-
 	mov rsi, rdx                ;# uint8_t* scratchpad
 
 	mov rax, rbp

@@ -1,6 +1,5 @@
 /*
-Copyright (c) 2018-2020, tevador    <tevador@gmail.com>
-Copyright (c) 2025-2026, SChernykh  <https://github.com/SChernykh>
+Copyright (c) 2018-2019, tevador <tevador@gmail.com>
 
 All rights reserved.
 
@@ -29,16 +28,21 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
 
-#include <cstdint>
-#include <cstdlib>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-namespace randomx {
+#include <stddef.h>
 
-class SuperscalarProgram;
-struct ProgramConfiguration;
-class Program;
+#define alignSize(pos, align) (((pos - 1) / align + 1) * align)
 
-void* generateDatasetInitVectorRV64(uint8_t* buf, SuperscalarProgram* programs, size_t num_programs);
-void* generateProgramVectorRV64(uint8_t* buf, Program& prog, ProgramConfiguration& pcfg, const uint8_t (&inst_map)[256], void* entryDataInitScalar, uint32_t datasetOffset);
+void* allocMemoryPages(size_t);
+void setPagesRW(void*, size_t);
+void setPagesRX(void*, size_t);
+void setPagesRWX(void*, size_t);
+void* allocLargePagesMemory(size_t);
+void freePagedMemory(void*, size_t);
 
-} // namespace randomx
+#ifdef __cplusplus
+}
+#endif

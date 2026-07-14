@@ -34,40 +34,47 @@ namespace randomx {
 	static_assert(sizeof(MemoryRegisters) == 2 * sizeof(addr_t) + sizeof(uintptr_t), "Invalid alignment of struct randomx::MemoryRegisters");
 	static_assert(sizeof(RegisterFile) == 256, "Invalid alignment of struct randomx::RegisterFile");
 
-	template<int softAes>
-	void CompiledVm<softAes>::setDataset(randomx_dataset* dataset) {
+	template<class Allocator, bool softAes, bool secureJit>
+	CompiledVm<Allocator, softAes, secureJit>::CompiledVm() {
+		if (!secureJit) {
+			compiler.enableAll(); //make JIT buffer both writable and executable
+		}
+	}
+
+	template<class Allocator, bool softAes, bool secureJit>
+	void CompiledVm<Allocator, softAes, secureJit>::setDataset(randomx_dataset* dataset) {
 		datasetPtr = dataset;
 	}
 
-	template<int softAes>
-	void CompiledVm<softAes>::run(void* seed) {
-
-		compiler.prepare();
-		VmBase<softAes>::generateProgram(seed);
+	template<class Allocator, bool softAes, bool secureJit>
+	void CompiledVm<Allocator, softAes, secureJit>::run(void* seed) {
+		VmBase<Allocator, softAes>::generateProgram(seed);
 		randomx_vm::initialize();
-		compiler.generateProgram(program, config, randomx_vm::getFlags());
+		if (secureJit) {
+			compiler.enableWriting();
+		}
+		compiler.generateProgram(program, config);
+		if (secureJit) {
+			compiler.enableExecution();
+		}
 		mem.memory = datasetPtr->memory + datasetOffset;
 		execute();
 	}
 
-	template<int softAes>
-	void CompiledVm<softAes>::execute() {
-
-
-
-		const uint8_t* p = mem.memory;
-
-		// dataset prefetch for the first iteration of the main loop
-		rx_prefetch_nta(p + (mem.ma & (RandomX_ConfigurationBase::DatasetBaseSize - 64)));
-
-		// dataset prefetch for the second iteration of the main loop (RandomX v2)
-		if (RandomX_CurrentConfig.Tweak_V2_PREFETCH) {
-			rx_prefetch_nta(p + (mem.mx & (RandomX_ConfigurationBase::DatasetBaseSize - 64)));
-		}
-
-		compiler.getProgramFunc()(reg, mem, scratchpad, RandomX_CurrentConfig.ProgramIterations);
+	template<class Allocator, bool softAes, bool secureJit>
+	void CompiledVm<Allocator, softAes, secureJit>::execute() {
+#ifdef __aarch64__
+		memcpy(reg.f, config.eMask, sizeof(config.eMask));
+#endif
+		compiler.getProgramFunc()(reg, mem, scratchpad, RANDOMX_PROGRAM_ITERATIONS);
 	}
 
-	template class CompiledVm<false>;
-	template class CompiledVm<true>;
+	template class CompiledVm<AlignedAllocator<CacheLineSize>, false, false>;
+	template class CompiledVm<AlignedAllocator<CacheLineSize>, true, false>;
+	template class CompiledVm<LargePageAllocator, false, false>;
+	template class CompiledVm<LargePageAllocator, true, false>;
+	template class CompiledVm<AlignedAllocator<CacheLineSize>, false, true>;
+	template class CompiledVm<AlignedAllocator<CacheLineSize>, true, true>;
+	template class CompiledVm<LargePageAllocator, false, true>;
+	template class CompiledVm<LargePageAllocator, true, true>;
 }

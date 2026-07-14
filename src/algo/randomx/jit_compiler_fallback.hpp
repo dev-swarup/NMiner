@@ -36,23 +36,22 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 namespace randomx {
 
 	class Program;
-	class ProgramConfiguration;
+	struct ProgramConfiguration;
 	class SuperscalarProgram;
 
 	class JitCompilerFallback {
 	public:
-		explicit JitCompilerFallback(bool, bool) {
+		JitCompilerFallback() {
 			throw std::runtime_error("JIT compilation is not supported on this platform");
 		}
-		void prepare() {}
-		void generateProgram(Program&, ProgramConfiguration&, uint32_t) {
+		void generateProgram(Program&, ProgramConfiguration&) {
 
 		}
 		void generateProgramLight(Program&, ProgramConfiguration&, uint32_t) {
 
 		}
 		template<size_t N>
-		void generateSuperscalarHash(SuperscalarProgram(&programs)[N]) {
+		void generateSuperscalarHash(SuperscalarProgram(&programs)[N], std::vector<uint64_t> &) {
 
 		}
 		void generateDatasetInitCode() {
@@ -72,5 +71,6 @@ namespace randomx {
 		}
 		void enableWriting() {}
 		void enableExecution() {}
+		void enableAll() {}
 	};
 }

@@ -24,7 +24,6 @@
 	push rcx                    ;# RegisterFile& registerFile
 	mov rbp, qword ptr [rdx]    ;# "mx", "ma"
 	mov rdi, qword ptr [rdx+8]  ;# uint8_t* dataset
-
 	mov rsi, r8                 ;# uint8_t* scratchpad
 	mov rbx, r9                 ;# loop counter
 

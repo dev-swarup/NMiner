@@ -55,7 +55,7 @@ namespace randomx {
 
 	void Blake2Generator::checkData(const size_t bytesNeeded) {
 		if (dataIndex + bytesNeeded > sizeof(data)) {
-			blake2b(data, sizeof(data), data, sizeof(data));
+			blake2b(data, sizeof(data), data, sizeof(data), nullptr, 0);
 			dataIndex = 0;
 		}
 	}

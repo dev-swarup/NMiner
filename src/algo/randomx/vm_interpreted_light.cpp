@@ -31,14 +31,14 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace randomx {
 
-	template<int softAes>
-	void InterpretedLightVm<softAes>::setCache(randomx_cache* cache) {
+	template<class Allocator, bool softAes>
+	void InterpretedLightVm<Allocator, softAes>::setCache(randomx_cache* cache) {
 		cachePtr = cache;
 		mem.memory = cache->memory;
 	}
 
-	template<int softAes>
-	void InterpretedLightVm<softAes>::datasetRead(uint64_t address, int_reg_t(&r)[8]) {
+	template<class Allocator, bool softAes>
+	void InterpretedLightVm<Allocator, softAes>::datasetRead(uint64_t address, int_reg_t(&r)[8]) {
 		uint32_t itemNumber = address / CacheLineSize;
 		int_reg_t rl[8];
 		
@@ -48,6 +48,8 @@ namespace randomx {
 			r[q] ^= rl[q];
 	}
 
-	template class InterpretedLightVm<false>;
-	template class InterpretedLightVm<true>;
+	template class InterpretedLightVm<AlignedAllocator<CacheLineSize>, false>;
+	template class InterpretedLightVm<AlignedAllocator<CacheLineSize>, true>;
+	template class InterpretedLightVm<LargePageAllocator, false>;
+	template class InterpretedLightVm<LargePageAllocator, true>;
 }

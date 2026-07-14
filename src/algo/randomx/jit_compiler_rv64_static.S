@@ -40,12 +40,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .global DECL(randomx_riscv64_prologue)
 .global DECL(randomx_riscv64_loop_begin)
 .global DECL(randomx_riscv64_data_read)
-.global DECL(randomx_riscv64_data_read_v2_tweak)
 .global DECL(randomx_riscv64_data_read_light)
-.global DECL(randomx_riscv64_data_read_light_v1)
-.global DECL(randomx_riscv64_data_read_light_v2)
 .global DECL(randomx_riscv64_fix_loop_call)
 .global DECL(randomx_riscv64_spad_store)
+.global DECL(randomx_riscv64_spad_store_hardaes)
 .global DECL(randomx_riscv64_spad_store_softaes)
 .global DECL(randomx_riscv64_loop_end)
 .global DECL(randomx_riscv64_fix_continue_loop)
@@ -62,7 +60,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     #error RANDOMX_PROGRAM_SIZE larger than 494 is not supported.
 #endif
 
-#define RANDOMX_ARGON_MEMORY 262144
 #define RANDOMX_CACHE_MASK (RANDOMX_ARGON_MEMORY*16-1)
 
 /* shared literal pool: 4 KB */
@@ -85,10 +82,10 @@ literal_pool:
     .word  0x00000003 /* RUP */
     .word  0x00000001 /* RTZ */
     /* mask literals +80,+84,+88,+92,+96,+104 */
-    .word (/*RANDOMX_SCRATCHPAD_L1*/0) /* filled by JIT compiler */
-    .word (/*RANDOMX_SCRATCHPAD_L2*/0) /* filled by JIT compiler */
-    .word (/*RANDOMX_SCRATCHPAD_L3*/0) /* filled by JIT compiler */
-    .word (/*RANDOMX_DATASET_BASE_SIZE*/0) /* filled by JIT compiler */
+    .word (RANDOMX_SCRATCHPAD_L1-8)
+    .word (RANDOMX_SCRATCHPAD_L2-8)
+    .word (RANDOMX_SCRATCHPAD_L3-64)
+    .word (RANDOMX_DATASET_BASE_SIZE-64)
     .dword 0x80f0000000000000
     .dword 0x00ffffffffffffff
 DECL(randomx_riscv64_literals_end):
@@ -410,9 +407,7 @@ DECL(randomx_riscv64_data_read):
     slli x8, x8, 32
     srli x8, x8, 32
 #endif
-DECL(randomx_riscv64_data_read_v2_tweak):
-    slli x8, x8, 32 /* JIT compiler will replace it with "nop" for RandomX v1 */
-    /* update "mp" */
+    /* update "mx" */
     xor x25, x25, x8
     /* read dataset and update registers */
     ld x8, 0(x7)
@@ -460,22 +455,13 @@ DECL(randomx_riscv64_data_read_light):
     slli x25, x25, 32
     or x25, x25, x31
 #endif
-DECL(randomx_riscv64_data_read_light_v1):
     slli x8, x8, 32
-    /* update "mp" */
+    /* update "mx" */
     xor x25, x25, x8
     /* the next dataset item */
     and x7, x25, x1
     srli x7, x7, 6
     add x7, x7, x9
-DECL(randomx_riscv64_data_read_light_v2):
-    /* the next dataset item */
-    and x7, x25, x1
-    srli x7, x7, 6
-    add x7, x7, x9
-    and x8, x8, x1
-    /* update "mp" */
-    xor x25, x25, x8
 DECL(randomx_riscv64_fix_loop_call):
     jal superscalar_hash /* JIT compiler will adjust the offset */
     xor x16, x16, x8
@@ -548,6 +534,9 @@ DECL(randomx_riscv64_spad_store):
     fmv.d.x f6, x8
     sd x30, 56(x26)
     fmv.d.x f7, x30
+
+DECL(randomx_riscv64_spad_store_hardaes):
+    nop /* not implemented */
 
 DECL(randomx_riscv64_spad_store_softaes):
     /* store integer registers */

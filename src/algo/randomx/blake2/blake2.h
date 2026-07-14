@@ -79,28 +79,34 @@ extern "C" {
 	/* Ensure param structs have not been wrongly padded */
 	/* Poor man's static_assert */
 	enum {
-		blake2_size_check_0 = 1 / (int)(CHAR_BIT == 8),
+		blake2_size_check_0 = 1 / !!(CHAR_BIT == 8),
 		blake2_size_check_2 =
-		1 / (int)(sizeof(blake2b_param) == sizeof(uint64_t) * CHAR_BIT)
+		1 / !!(sizeof(blake2b_param) == sizeof(uint64_t) * CHAR_BIT)
 	};
 
+	//randomx namespace
+#define blake2b_init        randomx_blake2b_init
+#define blake2b_init_key    randomx_blake2b_init_key
+#define blake2b_init_param  randomx_blake2b_init_param
+#define blake2b_update      randomx_blake2b_update
+#define blake2b_final       randomx_blake2b_final
+#define blake2b             randomx_blake2b
+#define blake2b_long        randomx_blake2b_long
+
 	/* Streaming API */
-    int blake2b_init(blake2b_state *S, size_t outlen);
-    int blake2b_init_key(blake2b_state *S, size_t outlen, const void *key, size_t keylen);
-    int blake2b_init_param(blake2b_state *S, const blake2b_param *P);
-    int blake2b_update(blake2b_state *S, const void *in, size_t inlen);
-    int blake2b_final(blake2b_state *S, void *out, size_t outlen);
+	int blake2b_init(blake2b_state *S, size_t outlen);
+	int blake2b_init_key(blake2b_state *S, size_t outlen, const void *key,
+		size_t keylen);
+	int blake2b_init_param(blake2b_state *S, const blake2b_param *P);
+	int blake2b_update(blake2b_state *S, const void *in, size_t inlen);
+	int blake2b_final(blake2b_state *S, void *out, size_t outlen);
 
 	/* Simple API */
-    void blake2b_compress_integer(blake2b_state * S, const uint8_t * block);
-    void blake2b_compress_sse41(blake2b_state * S, const uint8_t * block);
-    int blake2b_default(void* out, size_t outlen, const void* in, size_t inlen);
-
-    void blake2b_compress(blake2b_state * S, const uint8_t * block);
-    int blake2b(void* out, size_t outlen, const void* in, size_t inlen);
+	int blake2b(void *out, size_t outlen, const void *in, size_t inlen,
+		const void *key, size_t keylen);
 
 	/* Argon2 Team - Begin Code */
-	int rxa2_blake2b_long(void *out, size_t outlen, const void *in, size_t inlen);
+	int blake2b_long(void *out, size_t outlen, const void *in, size_t inlen);
 	/* Argon2 Team - End Code */
 
 #if defined(__cplusplus)

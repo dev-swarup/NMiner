@@ -28,85 +28,34 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
 
-#include <cstdint>
-#include <cstring>
-#include <vector>
 #include "common.hpp"
+#include <sstream>
 
 namespace randomx {
 
 	class Program;
-	struct ProgramConfiguration;
 	class SuperscalarProgram;
-	class JitCompilerX86;
+	class AssemblyGeneratorX86;
 	class Instruction;
 
-	typedef void(JitCompilerX86::*InstructionGeneratorX86)(Instruction&, int);
+	typedef void(AssemblyGeneratorX86::*InstructionGenerator)(Instruction&, int);
 
-	class JitCompilerX86 {
+	class AssemblyGeneratorX86 {
 	public:
-		JitCompilerX86();
-		~JitCompilerX86();
-		void generateProgram(Program&, ProgramConfiguration&);
-		void generateProgramLight(Program&, ProgramConfiguration&, uint32_t);
-		template<size_t N>
-		void generateSuperscalarHash(SuperscalarProgram (&programs)[N], std::vector<uint64_t> &);
-		void generateDatasetInitCode();
-		ProgramFunc* getProgramFunc() {
-			return (ProgramFunc*)code;
+		void generateProgram(Program& prog);
+		void generateAsm(SuperscalarProgram& prog);
+		void generateC(SuperscalarProgram& prog);
+		void printCode(std::ostream& os) {
+			os << asmCode.rdbuf();
 		}
-		DatasetInitFunc* getDatasetInitFunc() {
-			return (DatasetInitFunc*)code;
-		}
-		uint8_t* getCode() {
-			return code;
-		}
-		size_t getCodeSize();
-		void enableWriting();
-		void enableExecution();
-		void enableAll();
 	private:
-		static InstructionGeneratorX86 engine[256];
-		std::vector<int32_t> instructionOffsets;
-		int registerUsage[RegistersCount];
-		uint8_t* code;
-		int32_t codePos;
-
-		void generateProgramPrologue(Program&, ProgramConfiguration&);
-		void generateProgramEpilogue(Program&, ProgramConfiguration&);
-		void genAddressReg(Instruction&, bool);
-		void genAddressRegDst(Instruction&);
-		void genAddressImm(Instruction&);
-		void genSIB(int scale, int index, int base);
-
+		void genAddressReg(Instruction&, const char*);
+		void genAddressRegDst(Instruction&, int);
+		int32_t genAddressImm(Instruction&);
 		void generateCode(Instruction&, int);
-		void generateSuperscalarCode(Instruction &, std::vector<uint64_t> &);
-
-		void emitByte(uint8_t val) {
-			code[codePos] = val;
-			codePos++;
-		}
-
-		void emit32(uint32_t val) {
-			memcpy(code + codePos, &val, sizeof val);
-			codePos += sizeof val;
-		}
-
-		void emit64(uint64_t val) {
-			memcpy(code + codePos, &val, sizeof val);
-			codePos += sizeof val;
-		}
-
-		template<size_t N>
-		void emit(const uint8_t (&src)[N]) {
-			emit(src, N);
-		}
-
-		void emit(const uint8_t* src, size_t count) {
-			memcpy(code + codePos, src, count);
-			codePos += count;
-		}
-
+		void traceint(Instruction&);
+		void traceflt(Instruction&);
+		void tracenop(Instruction&);
 		void h_IADD_RS(Instruction&, int);
 		void h_IADD_M(Instruction&, int);
 		void h_ISUB_R(Instruction&, int);
@@ -137,6 +86,9 @@ namespace randomx {
 		void h_CFROUND(Instruction&, int);
 		void h_ISTORE(Instruction&, int);
 		void h_NOP(Instruction&, int);
-	};
 
+		static InstructionGenerator engine[256];
+		std::stringstream asmCode;
+		int registerUsage[RegistersCount];
+	};
 }

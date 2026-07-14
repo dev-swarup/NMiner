@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2019, tevador    <tevador@gmail.com>
+Copyright (c) 2019, tevador <tevador@gmail.com>
 
 All rights reserved.
 
@@ -26,12 +26,24 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#pragma once
 
-void randomx_set_huge_pages_jit(bool)
-{
-}
+namespace randomx {
 
+	class Cpu {
+	public:
+		Cpu();
+		bool hasAes() const {
+			return aes_;
+		}
+		bool hasSsse3() const {
+			return ssse3_;
+		}
+		bool hasAvx2() const {
+			return avx2_;
+		}
+	private:
+		bool aes_, ssse3_, avx2_;
+	};
 
-void randomx_set_optimized_dataset_init(int)
-{
 }
