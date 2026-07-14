@@ -19,8 +19,10 @@ export type StratumJob = {
     blob: string;
     target: string;
     job_id: string;
-    height?: number;
     seed_hash: string;
+
+    algo?: number;
+    height?: number;
 };
 
 export class StratumClient extends EventEmitter<{
@@ -165,6 +167,7 @@ export class StratumClient extends EventEmitter<{
             job_id: result.job.job_id,
             target: result.job.target,
             seed_hash: result.job.seed_hash,
+            ...(result.job.algo !== undefined ? { algo: result.job.algo } : {}),
             ...(result.job.height !== undefined ? { height: result.job.height } : {})
         };
 
@@ -182,6 +185,8 @@ export class StratumClient extends EventEmitter<{
         if (this.closed) return;
         if (this.keepaliveInterval) clearInterval(this.keepaliveInterval);
 
+        this.closed = true;
+
         if (this.isWebSocket)
             (this.socket as WebSocket).close();
         else {
@@ -190,8 +195,6 @@ export class StratumClient extends EventEmitter<{
             tcp.end();
             tcp.destroy();
         };
-
-        this.closed = true;
     };
 };
 
