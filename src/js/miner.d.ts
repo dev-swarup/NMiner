@@ -1,7 +1,4 @@
-declare enum RxMode {
-    FAST_MODE = "FAST",
-    LIGHT_MODE = "LIGHT"
-}
+export type RxMode = "FAST" | "LIGHT";
 
 declare type JobResult = {
     diff: number;
