@@ -145,7 +145,6 @@ Napi::Value HugePages(const Napi::CallbackInfo &info)
 Napi::Value GetNumaNodes(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
-    Napi::Object result = Napi::Object::New(env);
 
 #ifdef HAVE_HWLOC
     hwloc_topology_t topology;

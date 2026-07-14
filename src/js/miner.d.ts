@@ -5,14 +5,14 @@ declare type JobResult = {
     txnCount?: number;
 }
 
-declare type RxVariant = "rx/0" | "rx/wow" | "rx/arq" | "rx/sfx" | "rx/yada" | "rx/graft" | "rx/monero";
-declare type RxSubmitFn = (job_id: string, nonce: string, result: string) => void | Promise<void>
+declare type RxVariant = "rx/0" | "rx/monero";
+declare type RxSubmitFn = (nonce: Buffer, result: Buffer) => void | Promise<void>
 
 export class Rx {
     constructor(variant: RxVariant, mode: RxMode);
 
-    public allocate(seed_hash: string): Promise<boolean>;
-    public reallocate(seed_hash: string, variant?: RxVariant): Promise<boolean>;
+    public allocate(seed_hash: Buffer): Promise<boolean>;
+    public reallocate(seed_hash: Buffer, variant?: RxVariant): Promise<boolean>;
 }
 
 export class RxJob {
@@ -20,7 +20,11 @@ export class RxJob {
 
     public stop(): void;
     public pause(): void;
-    public start(threads?: number): void;
-
-    public send_job(job_id: string, blob: string, diff: string, reset_nonce: boolean): JobResult;
+    public start(threads?: number[]): void;
+    
+    public get_hashes(): number;
+    public send_job(blob: Buffer, diff: Buffer, reset_nonce: boolean): JobResult;
 }
+
+export function numaNodes(): number;
+export function hugePages(pages?: number): number;
