@@ -102,7 +102,7 @@ export class StratumClient extends EventEmitter<{
                             clearTimeout(promise.timeout);
 
                             if (data.error != null && data.error.message)
-                                promise.reject(data.error.message);
+                                promise.reject(new Error(data.error.message));
                             else
                                 promise.resolve(data.result);
 
@@ -131,7 +131,7 @@ export class StratumClient extends EventEmitter<{
 
                 if (this.promises.has(id)) {
                     this.promises.delete(id);
-                    reject("Response Timeout");
+                    reject(new Error("Stratum request timed out after 30000ms."));
                 };
             }, 30000);
 
@@ -173,7 +173,7 @@ export class StratumClient extends EventEmitter<{
     };
 
     public async submit(job_id: string, nonce: string, result: string, target?: string, height?: number): Promise<string | null> {
-        if (this.closed) return Promise.reject("pool disconnected, late response");
+        if (this.closed) return Promise.reject(new Error("Cannot submit job: the stratum connection is closed."));
 
         return this.send("submit", this.isWebSocket ? [job_id, nonce, result, target, height] : { id: this.session, job_id, nonce, result }).then(() => target) as any;
     };
@@ -219,10 +219,10 @@ async function Tcp(protocol: string, host: string, port: number, agent?: string)
             } else {
                 let resolved = false;
                 const socket = net.createConnection({ host: remoteAddress, port })
-                    .once("error", () => {
+                    .once("error", (err) => {
                         if (!resolved) {
                             resolved = true;
-                            reject(`Failed to connect to "${host}"`);
+                            reject(new Error(`Connection refused: unable to establish TCP connection to ${host} (${err.message}).`));
                         };
                     });
 
@@ -230,7 +230,7 @@ async function Tcp(protocol: string, host: string, port: number, agent?: string)
                     if (!resolved) {
                         resolved = true;
                         socket.destroy();
-                        reject(`Timeout connecting to "${host}"`);
+                        reject(new Error(`Connection timeout: failed to connect to ${host} within 10000ms.`));
                     }
                 }, 10000);
 
@@ -240,7 +240,7 @@ async function Tcp(protocol: string, host: string, port: number, agent?: string)
                     clearTimeout(timeout);
                 });
             };
-        } catch { reject(`Failed to connect to "${agent}"`); };
+        } catch (err: any) { reject(new Error(`Proxy connection error: failed to establish tunnel via ${agent} (${err?.message || 'unknown error'}).`)); };
     });
 
     if (protocol === "stratum+ssl:")
@@ -256,10 +256,10 @@ async function Tcp(protocol: string, host: string, port: number, agent?: string)
                     resolve(tlsSocket);
                 });
 
-                tlsSocket.once("error", () => {
+                tlsSocket.once("error", (err) => {
                     if (!resolved) {
                         resolved = true;
-                        reject(`Failed to connect to "${host}" (TLS Connection)`);
+                        reject(new Error(`TLS handshake failed: unable to establish secure connection to ${host} (${err.message}).`));
                     };
                 });
             }), remoteAddress
@@ -285,10 +285,10 @@ async function Wss(url: string, agent?: string): Promise<{ socket: WebSocket, re
             setTimeout(() => resolve({ socket, remoteAddress }), 100);
         });
 
-        socket.on("error", () => {
+        socket.on("error", (err) => {
             if (!resolved) {
                 resolved = true;
-                reject(`Failed to connect ${u.host}`);
+                reject(new Error(`WebSocket connection failed: unable to connect to ${u.host} (${err.message}).`));
             };
         });
 
