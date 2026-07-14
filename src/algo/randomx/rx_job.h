@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdint>
 #include <algorithm>
+#include <condition_variable>
 
 #ifdef HAVE_HWLOC
     #include <hwloc.h>
