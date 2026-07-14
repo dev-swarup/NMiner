@@ -19,19 +19,18 @@
         "build": "cmake-js -p${nproc} compile"
     },
     "dependencies": {
-        "ws": "^8.19.0",
-        "socks": "^2.8.7",
-        "axios": "^1.13.6",
+        "ws": "^8.21.0",
+        "socks": "^2.8.9",
         "colors": "^1.4.0",
         "cmake-js": "^8.0.0",
-        "proxy-agent": "^7.0.0",
-        "node-addon-api": "^8.6.0"
+        "proxy-agent": "^8.0.2",
+        "node-addon-api": "^8.9.0",
+        "systeminformation": "^5.31.17"
     },
     "devDependencies": {
-        "@types/ws": "^8.5.14",
-        "typescript": "^5.8.0",
-        "@types/bun": "^1.3.10",
-        "@types/node": "^25.4.0"
+        "@types/ws": "^8.18.1",
+        "typescript": "^7.0.2",
+        "@types/node": "^26.1.1"
     },
     "engines": {
         "node": ">=22.0.0"
