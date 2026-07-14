@@ -119,7 +119,7 @@ Napi::Object Rx::Init(Napi::Env env, Napi::Object exports)
     return exports;
 };
 
-Rx::Rx(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Rx>(info), cache(nullptr), dataset(nullptr), updating(false)
+Rx::Rx(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Rx>(info), cache(nullptr), updating(false)
 {
     Napi::Env env = info.Env();
     if (info.Length() < 2 || !info[0].IsString() || !info[1].IsString()) 
@@ -145,7 +145,12 @@ Rx::Rx(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Rx>(info), cache(nullp
 
 Rx::~Rx()
 {
-    if (dataset) randomx_release_dataset(dataset);
+    for (auto const& [k, dataset] : datasets) 
+    {
+        if (dataset) randomx_release_dataset(dataset);
+    };
+
+    datasets.clear();
     if (cache) randomx_release_cache(cache);
 };
 
@@ -196,12 +201,32 @@ Napi::Value Rx::reallocate(const Napi::CallbackInfo& info)
 
 std::shared_ptr<randomx_numa> Rx::create_vm(uint32_t numa_node)
 {
+    randomx_dataset* dataset = nullptr;
+    if (m_mode == RANDOMX_FAST) 
+    {
+        auto it = datasets.find(numa_node);
+        if (it != datasets.end()) 
+        {
+            dataset = it->second;
+        } else 
+        {
+            return nullptr;
+        };
+    };
+
     if (!cache || (m_mode == RANDOMX_FAST && !dataset)) 
         return nullptr;
 
     randomx_flags flags = build_flags(m_mode);
-    randomx_vm *vm = randomx_create_vm(flags, cache, dataset);
+    uint8_t* scratchpad = AllocateNuma(RANDOMX_SCRATCHPAD_L3, numa_node);
 
-    if (vm) return std::make_shared<randomx_numa>(nullptr, vm, &active_vms);
+    randomx_vm *vm = randomx_create_vm(flags, cache, dataset, numa_node, scratchpad);
+
+    if (vm)
+    {
+        return std::make_shared<randomx_numa>(scratchpad, vm, &active_vms);
+    };
+
+    if (scratchpad) FreeNuma(scratchpad, RANDOMX_SCRATCHPAD_L3);
     return nullptr;
 };

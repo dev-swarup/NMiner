@@ -134,32 +134,54 @@ Napi::Value RxJob::Start(const Napi::CallbackInfo& info)
         return env.Undefined();
     };
 
-    uint32_t thread_count = 0;
-    if (info.Length() > 0 && info[0].IsNumber()) thread_count = info[0].As<Napi::Number>().Uint32Value();
+    std::vector<uint32_t> threads;
+    if (info.Length() > 0) threads = ParseThread(env, info[0]);
 
     m_active.store(true, std::memory_order_relaxed);
     m_paused.store(false, std::memory_order_relaxed);
 
 #ifdef HAVE_HWLOC
-    int num_pus = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
-    if (thread_count == 0 || thread_count > (uint32_t)num_pus) thread_count = num_pus;
-
-    for (uint32_t i = 0; i < thread_count; ++i) 
+    if (threads.empty()) 
     {
-        hwloc_obj_t pu = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i % num_pus);
-        uint32_t core_id = pu->os_index;
-        
-        hwloc_obj_t node_obj = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NUMANODE, pu);
+        int num_pus = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+        threads.push_back(num_pus > 0 ? num_pus : 1);
+    };
+
+    uint32_t thread_index = 0;
+    for (size_t n = 0; n < threads.size(); ++n) 
+    {
+        uint32_t thread_count = threads[n];
+        if (thread_count == 0) continue;
+
+        hwloc_obj_t node_obj = hwloc_get_obj_by_type(topology, HWLOC_OBJ_NUMANODE, n);
         uint32_t numa_node = node_obj ? node_obj->os_index : 0;
 
-        m_threads.push_back(std::thread(&RxJob::Loop, this, i, core_id, numa_node));
+        int num_pus = node_obj ? hwloc_get_nbobjs_inside_cpuset_by_type(topology, node_obj->cpuset, HWLOC_OBJ_PU) : hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+        if (num_pus <= 0) num_pus = 1;
+
+        for (uint32_t i = 0; i < thread_count; ++i) 
+        {
+            hwloc_obj_t pu = node_obj ? hwloc_get_obj_inside_cpuset_by_type(topology, node_obj->cpuset, HWLOC_OBJ_PU, i % num_pus) : hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i % num_pus);
+            uint32_t core_id = pu ? pu->os_index : 0;
+
+            m_threads.push_back(std::thread(&RxJob::Loop, this, thread_index++, core_id, numa_node));
+        };
     };
 #else
-    if (thread_count == 0) thread_count = std::thread::hardware_concurrency();
-
-    for (uint32_t i = 0; i < thread_count; ++i) 
+    if (threads.empty())
     {
-        m_threads.push_back(std::thread(&RxJob::Loop, this, i, i, 0));
+        uint32_t hw_conc = std::thread::hardware_concurrency();
+        threads.push_back(hw_conc > 0 ? hw_conc : 1);
+    };
+
+    uint32_t thread_index = 0;
+    for (size_t n = 0; n < threads.size(); ++n) 
+    {
+        uint32_t thread_count = threads[n];
+        for (uint32_t i = 0; i < thread_count; ++i) 
+        {
+            m_threads.push_back(std::thread(&RxJob::Loop, this, thread_index++, thread_index, 0));
+        };
     };
 #endif
 

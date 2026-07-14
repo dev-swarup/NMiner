@@ -63,13 +63,15 @@ protected:
 	alignas(64) randomx::RegisterFile reg;
 	alignas(16) randomx::ProgramConfiguration config;
 	randomx::MemoryRegisters mem;
-	uint8_t* scratchpad = nullptr;
 	union {
 		randomx_cache* cachePtr = nullptr;
 		randomx_dataset* datasetPtr;
 	};
 	uint64_t datasetOffset;
 public:
+	uint8_t* scratchpad = nullptr;
+	int numa_node;
+
 	std::string cacheKey;
 	alignas(16) uint64_t tempHash[8]; //8 64-bit values used to store intermediate data
 };

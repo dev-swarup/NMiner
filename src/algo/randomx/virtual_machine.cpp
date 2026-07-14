@@ -99,7 +99,7 @@ namespace randomx {
 
 	template<class Allocator, bool softAes>
 	VmBase<Allocator, softAes>::~VmBase() {
-		Allocator::freeMemory(scratchpad, ScratchpadSize);
+
 	}
 
 	template<class Allocator, bool softAes>
@@ -111,7 +111,6 @@ namespace randomx {
 			tmp = rx_aesenc_vec_i128(tmp, tmp);
 			rx_store_vec_i128((rx_vec_i128*)&aesDummy, tmp);
 		}
-		scratchpad = (uint8_t*)Allocator::allocMemory(ScratchpadSize);
 	}
 
 	template<class Allocator, bool softAes>

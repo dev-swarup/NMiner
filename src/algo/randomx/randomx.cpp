@@ -203,7 +203,7 @@ extern "C" {
 		delete dataset;
 	}
 
-	randomx_vm *randomx_create_vm(randomx_flags flags, randomx_cache *cache, randomx_dataset *dataset) {
+	randomx_vm *randomx_create_vm(randomx_flags flags, randomx_cache *cache, randomx_dataset *dataset, int numa_node, uint8_t *scratchpad) {
 		assert(cache != nullptr || (flags & RANDOMX_FLAG_FULL_MEM));
 		assert(cache == nullptr || cache->isInitialized());
 		assert(dataset != nullptr || !(flags & RANDOMX_FLAG_FULL_MEM));
@@ -327,6 +327,9 @@ extern "C" {
 
 			if(dataset != nullptr)
 				vm->setDataset(dataset);
+
+			vm->numa_node = numa_node;
+			vm->scratchpad = scratchpad;
 
 			vm->allocate();
 		}

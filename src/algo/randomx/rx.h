@@ -12,11 +12,28 @@
     #include <hwloc.h>
 #endif
 
+#include <map>
 #include <vector>
 
 inline std::vector<uint8_t> Buffer(const Napi::Buffer<uint8_t>& buf)
 {
     return std::vector<uint8_t>(buf.Data(), buf.Data() + buf.Length());
+};
+
+inline std::vector<uint32_t> ParseThread(Napi::Env env, Napi::Value val)
+{
+    std::vector<uint32_t> threads;
+
+    if (val.IsArray()) 
+    {
+        Napi::Array arr = val.As<Napi::Array>();
+        for (uint32_t i = 0; i < arr.Length(); ++i) 
+        {
+            threads.push_back(arr.Get(i).As<Napi::Number>().Uint32Value());
+        };
+    };
+
+    return threads;
 };
 
 typedef enum {
@@ -51,10 +68,11 @@ public:
 
     std::mutex mutex;
     randomx_mode m_mode;
-    randomx_cache *cache;
-    randomx_dataset *dataset;
     std::atomic<bool> updating;
     std::atomic<int> active_vms {0};
+
+    randomx_cache *cache;
+    std::map<uint32_t, randomx_dataset*> datasets;
 
     std::shared_ptr<randomx_numa> create_vm(uint32_t numa_node);
 };
