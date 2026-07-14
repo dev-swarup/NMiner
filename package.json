@@ -4,6 +4,16 @@
     "version": "1.2.13",
     "typings": "index.d.ts",
     "description": "NMiner is a silent, high performance, open source, cross platform RandomX CPU miner. Official binaries are available for Windows and Linux.",
+    "exports": {
+        ".": {
+            "types": "./index.d.ts",
+            "default": "./index.js"
+        },
+        "./miner": {
+            "types": "./src/js/miner.d.ts",
+            "default": "./src/js/miner.js"
+        }
+    },
     "scripts": {
         "tsc": "tsc",
         "build": "cmake-js -p${nproc} compile"
