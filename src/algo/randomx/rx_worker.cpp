@@ -1,8 +1,10 @@
 #include <thread>
 #include <vector>
+#include <algorithm>
+
 #include "rx_worker.h"
 
-AllocateWorker::AllocateWorker(Napi::Env env, Rx* rx, std::string seed_hash, std::string variant) : Napi::AsyncWorker(env), deferred(Napi::Promise::Deferred::New(env)), rx(rx), seed_hash(seed_hash), variant(variant), result(false) 
+AllocateWorker::AllocateWorker(Napi::Env env, Rx* rx, std::vector<uint8_t> seed_hash, std::string variant) : Napi::AsyncWorker(env), deferred(Napi::Promise::Deferred::New(env)), rx(rx), seed_hash(seed_hash), variant(variant), result(false) 
 {
 
 };
@@ -64,14 +66,7 @@ void AllocateWorker::Execute()
         };
     };
 
-    uint8_t m_seed[kMaxSeedSize];
-    if (hex2bin(m_seed, sizeof(m_seed), seed_hash.c_str(), seed_hash.size(), nullptr, nullptr, nullptr) != 0)
-    {
-        SetError("Failed to decode seed hash");
-        return;
-    };
-
-    randomx_init_cache(rx->cache, m_seed, sizeof(m_seed));
+    randomx_init_cache(rx->cache, seed_hash.data(), std::min<std::size_t>(seed_hash.size(), static_cast<std::size_t>(kMaxSeedSize)));
 
     if (rx->m_mode == RANDOMX_FAST) 
     {

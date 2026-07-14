@@ -1,7 +1,8 @@
-#include <iostream>
 #include <iomanip>
 #include <sstream>
 #include <cstring>
+#include <iostream>
+#include <algorithm>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -9,21 +10,8 @@
 #include <sys/mman.h>
 #endif
 
+#include "rx.h"
 #include "rx_job.h"
-
-static std::string bytes_to_hex(const uint8_t* data, size_t len) 
-{
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-
-    for (size_t i = 0; i < len; ++i) 
-    {
-        oss << std::setw(2) << static_cast<int>(data[i]);
-    };
-
-    return oss.str();
-};
-
 
 RxJob::RxJob(const Napi::CallbackInfo& info) : Napi::ObjectWrap<RxJob>(info)
 {
@@ -71,78 +59,50 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo& info)
     Napi::Env env = info.Env();
     Napi::Object exports = Napi::Object::New(env);
 
-    if (info.Length() != 4 || !info[0].IsString() || !info[1].IsString() || !info[2].IsString() || !info[3].IsBoolean()) 
+    if (info.Length() != 3 || !info[0].IsBuffer() || !info[1].IsBuffer() || !info[2].IsBoolean()) 
     {
-        Napi::Error::New(env, "Expected job_id, blob, difficulty and reset nonce").ThrowAsJavaScriptException();
+        Napi::Error::New(env, "Expected blob, target and reset nonce").ThrowAsJavaScriptException();
         return env.Null();
     };
 
-    std::string job_id = info[0].As<Napi::String>().Utf8Value();
+    std::vector<uint8_t> blob = Buffer(info[0].As<Napi::Buffer<uint8_t>>());
+    size_t blob_size = std::min<std::size_t>(blob.size(), kMaxBlobSize);
 
-    bool blob_changed;
-    size_t new_blob_size;
-    uint8_t new_blob[kMaxBlobSize]{};
     uint32_t num_transactions = 0;
+    const size_t expected_tx_offset = 75;
+    if (blob_size > expected_tx_offset && blob_size <= expected_tx_offset + 4)
     {
-        std::string blob = info[1].As<Napi::String>();
-
-        new_blob_size = blob.size() / 2;
-        if (hex2bin(new_blob, sizeof(new_blob), blob.c_str(), blob.size(), nullptr, nullptr, nullptr) != 0) 
+        for (size_t i = expected_tx_offset, k = 0; i < blob_size; ++i, k += 7)
         {
-            Napi::Error::New(env, "Failed to decode blob").ThrowAsJavaScriptException();
-            return env.Null();
-        };
+            const uint8_t j = blob[i];
+            num_transactions |= static_cast<uint32_t>(j & 0x7Fu) << k;
 
-        const size_t expected_tx_offset = 75;
-        if (new_blob_size > expected_tx_offset && new_blob_size <= expected_tx_offset + 4)
-        {
-            for (size_t i = expected_tx_offset, k = 0; i < new_blob_size; ++i, k += 7)
-            {
-                const uint8_t b = new_blob[i];
-                num_transactions |= static_cast<uint32_t>(b & 0x7Fu) << k;
-                if ((b & 0x80u) == 0) break;
-            };
-        };
-
-        if (new_blob_size != m_size)
-            blob_changed = true;
-        else {
-            for (size_t i = 0; i < new_blob_size; ++i) {
-                if (i >= kNonceOffset && i < kNonceOffset + 4) continue;
-                    if (new_blob[i] != m_blob[i]) {
-                        blob_changed = true;
-                        break;
-                    };
-            };
+            if ((j & 0x80u) == 0) break;
         };
     };
 
-    uint8_t raw[4];
-    uint64_t new_diff = 0;
-    uint64_t new_target = 0;
+    uint8_t raw[4] = {0};
     {
-        std::string difficulty = info[2].As<Napi::String>();
-
-        if (hex2bin(raw, sizeof(raw), difficulty.c_str(), difficulty.size(), nullptr, nullptr, nullptr) == 0)
-        {
-            new_target = 0xFFFFFFFFFFFFFFFFULL / (0xFFFFFFFFULL / uint64_t(*reinterpret_cast<const uint32_t *>(raw)));
-            new_diff = static_cast<uint64_t>(0xFFFFFFFFFFFFFFFFULL / new_target);
-        };
+        std::vector<uint8_t> target = Buffer(info[1].As<Napi::Buffer<uint8_t>>());
+        std::memcpy(raw, target.data(), std::min<std::size_t>(target.size(), sizeof(raw)));
     };
 
-    exports.Set("txnCount", Napi::Number::New(env, num_transactions));
-    exports.Set("diff", Napi::Number::New(env, new_diff));
+    uint64_t new_target = 0xFFFFFFFFFFFFFFFFULL / (0xFFFFFFFFULL / uint64_t(*reinterpret_cast<const uint32_t *>(raw)));
+    uint64_t new_diff = static_cast<uint64_t>(0xFFFFFFFFFFFFFFFFULL / new_target);
+
+    bool reset_nonce = info[2].As<Napi::Boolean>().ToBoolean();
 
     {
         std::lock_guard<std::mutex> lock(m_job_mutex);
-        m_job_id = job_id;
-        m_size = new_blob_size;
-        memcpy(m_blob, new_blob, new_blob_size);
-        m_target = new_target;
+
+        m_size = blob_size;
+        std::memcpy(m_blob, blob.data(), blob_size);
+
         m_diff = new_diff;
+        m_target = new_target;
         m_nicehash = readUnaligned(reinterpret_cast<uint32_t *>(m_blob + kNonceOffset)) != 0;
         
-        if (blob_changed) 
+        if (reset_nonce) 
         {
             m_nonce_counter.store(0, std::memory_order_relaxed);
         };
@@ -151,6 +111,12 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo& info)
     };
 
     m_cv.notify_all();
+    
+    exports.Set("diff", Napi::Number::New(env, new_diff));
+
+    if (num_transactions != 0)
+        exports.Set("txnCount", Napi::Number::New(env, num_transactions));
+
     return exports;
 };
 
@@ -286,21 +252,14 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
                 uint64_t hash64 = readUnaligned(reinterpret_cast<uint64_t*>(hash + 24));
                 if (hash64 <= local_target) 
                 {
-                    char hex_nonce[9];
-                    bin2hex(hex_nonce, sizeof(hex_nonce), local_blob + kNonceOffset, 4);
-                    
-                    char hex_hash[65];
-                    bin2hex(hex_hash, sizeof(hex_hash), hash, 32);
-                    
-                    SubmitData* data = new SubmitData();
-                    data->nonce = hex_nonce;
-                    data->result = hex_hash;
-                    data->job_id = local_job_id;
+                    JobResult* result = new JobResult();
+                    std::memcpy(result->nonce, local_blob + kNonceOffset, 4);
+                    std::memcpy(result->result, hash, 32);
 
-                    tsfn.BlockingCall(data, [](Napi::Env env, Napi::Function jsSubmit, SubmitData* data) 
+                    tsfn.BlockingCall(result, [](Napi::Env env, Napi::Function jsSubmit, JobResult* result)
                     {
-                        jsSubmit.Call({ Napi::String::New(env, data->job_id), Napi::String::New(env, data->nonce), Napi::String::New(env, data->result) });
-                        delete data;
+                        jsSubmit.Call({ Napi::Buffer<uint8_t>::Copy(env, result->nonce, 4), Napi::Buffer<uint8_t>::Copy(env, result->result, 32) });
+                        delete result;
                     });
                 };
             };
@@ -310,7 +269,6 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
                 memcpy(local_blob, m_blob, m_size);
                 local_size = m_size;
                 local_target = m_target;
-                local_job_id = m_job_id;
                 local_version = m_job_version.load(std::memory_order_relaxed);
             };
             
@@ -326,21 +284,14 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
                 uint64_t hash64 = readUnaligned(reinterpret_cast<uint64_t*>(hash + 24));
                 if (hash64 <= local_target) 
                 {
-                    char hex_nonce[9];
-                    bin2hex(hex_nonce, sizeof(hex_nonce), local_blob + kNonceOffset, 4);
-                    
-                    char hex_hash[65];
-                    bin2hex(hex_hash, sizeof(hex_hash), hash, 32);
-                    
-                    SubmitData* data = new SubmitData();
-                    data->nonce = hex_nonce;
-                    data->result = hex_hash;
-                    data->job_id = local_job_id;
+                    JobResult* result = new JobResult();
+                    std::memcpy(result->nonce, local_blob + kNonceOffset, 4);
+                    std::memcpy(result->result, hash, 32);
 
-                    tsfn.BlockingCall(data, [](Napi::Env env, Napi::Function jsSubmit, SubmitData* data) 
+                    tsfn.BlockingCall(result, [](Napi::Env env, Napi::Function jsSubmit, JobResult* result)
                     {
-                        jsSubmit.Call({ Napi::String::New(env, data->job_id), Napi::String::New(env, data->nonce), Napi::String::New(env, data->result) });
-                        delete data;
+                        jsSubmit.Call({ Napi::Buffer<uint8_t>::Copy(env, result->nonce, 4), Napi::Buffer<uint8_t>::Copy(env, result->result, 32) });
+                        delete result;
                     });
                 };
 
@@ -398,22 +349,15 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
 
         uint64_t hash64 = readUnaligned(reinterpret_cast<uint64_t*>(hash + 24));
         if (hash64 <= local_target) 
-        {
-            char hex_nonce[9];
-            bin2hex(hex_nonce, sizeof(hex_nonce), local_blob + kNonceOffset, 4);
-            
-            char hex_hash[65];
-            bin2hex(hex_hash, sizeof(hex_hash), hash, 32);
-            
-            SubmitData* data = new SubmitData();
-            data->nonce = hex_nonce;
-            data->result = hex_hash;
-            data->job_id = local_job_id;
+        {           
+            JobResult* result = new JobResult();
+            std::memcpy(result->nonce, local_blob + kNonceOffset, 4);
+            std::memcpy(result->result, hash, 32);
 
-            tsfn.BlockingCall(data, [](Napi::Env env, Napi::Function jsSubmit, SubmitData* data) 
+            tsfn.BlockingCall(result, [](Napi::Env env, Napi::Function jsSubmit, JobResult* result)
             {
-                jsSubmit.Call({ Napi::String::New(env, data->job_id), Napi::String::New(env, data->nonce), Napi::String::New(env, data->result) });
-                delete data;
+                jsSubmit.Call({ Napi::Buffer<uint8_t>::Copy(env, result->nonce, 4), Napi::Buffer<uint8_t>::Copy(env, result->result, 32) });
+                delete result;
             });
         };
 
@@ -427,21 +371,14 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
         uint64_t hash64 = readUnaligned(reinterpret_cast<uint64_t*>(hash + 24));
         if (hash64 <= local_target) 
         {
-            char hex_nonce[9];
-            bin2hex(hex_nonce, sizeof(hex_nonce), local_blob + kNonceOffset, 4);
-            
-            char hex_hash[65];
-            bin2hex(hex_hash, sizeof(hex_hash), hash, 32);
-            
-            SubmitData* data = new SubmitData();
-            data->nonce = hex_nonce;
-            data->result = hex_hash;
-            data->job_id = local_job_id;
+            JobResult* result = new JobResult();
+            std::memcpy(result->nonce, local_blob + kNonceOffset, 4);
+            std::memcpy(result->result, hash, 32);
 
-            tsfn.BlockingCall(data, [](Napi::Env env, Napi::Function jsSubmit, SubmitData* data) 
+            tsfn.BlockingCall(result, [](Napi::Env env, Napi::Function jsSubmit, JobResult* result)
             {
-                jsSubmit.Call({ Napi::String::New(env, data->job_id), Napi::String::New(env, data->nonce), Napi::String::New(env, data->result) });
-                delete data;
+                jsSubmit.Call({ Napi::Buffer<uint8_t>::Copy(env, result->nonce, 4), Napi::Buffer<uint8_t>::Copy(env, result->result, 32) });
+                delete result;
             });
         };
     };

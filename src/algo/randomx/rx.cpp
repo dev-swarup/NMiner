@@ -152,13 +152,13 @@ Rx::~Rx()
 Napi::Value Rx::allocate(const Napi::CallbackInfo& info)
 {
     Napi::Env env = info.Env();
-    if (info.Length() < 1 || !info[0].IsString()) 
+    if (info.Length() < 1 || !info[0].IsBuffer()) 
     {
         Napi::Error::New(env, "Expected seed_hash").ThrowAsJavaScriptException();
         return env.Null();
     };
 
-    std::string seed_hash = info[0].As<Napi::String>().Utf8Value();
+    std::vector<uint8_t> seed_hash = Buffer(info[0].As<Napi::Buffer<uint8_t>>());
 
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -174,13 +174,13 @@ Napi::Value Rx::allocate(const Napi::CallbackInfo& info)
 Napi::Value Rx::reallocate(const Napi::CallbackInfo& info)
 {
     Napi::Env env = info.Env();
-    if (info.Length() < 1 || !info[0].IsString()) 
+    if (info.Length() < 1 || !info[0].IsBuffer()) 
     {
         Napi::Error::New(env, "Expected seed_hash").ThrowAsJavaScriptException();
         return env.Null();
     };
 
-    std::string seed_hash = info[0].As<Napi::String>().Utf8Value();
+    std::vector<uint8_t> seed_hash = Buffer(info[0].As<Napi::Buffer<uint8_t>>());
     std::string variant = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : "";
 
     {

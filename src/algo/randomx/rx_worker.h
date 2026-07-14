@@ -4,7 +4,7 @@
 
 class AllocateWorker : public Napi::AsyncWorker {
 public:
-    AllocateWorker(Napi::Env env, Rx* rx, std::string seed_hash, std::string variant);
+    AllocateWorker(Napi::Env env, Rx* rx, std::vector<uint8_t> seed_hash, std::string variant);
     ~AllocateWorker();
 
     void Execute() override;
@@ -18,6 +18,6 @@ private:
     Rx* rx;
     bool result;
     std::string variant;
-    std::string seed_hash;
+    std::vector<uint8_t> seed_hash;
     Napi::Promise::Deferred deferred;
 };

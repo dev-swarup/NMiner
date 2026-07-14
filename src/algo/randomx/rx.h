@@ -12,6 +12,13 @@
     #include <hwloc.h>
 #endif
 
+#include <vector>
+
+inline std::vector<uint8_t> Buffer(const Napi::Buffer<uint8_t>& buf)
+{
+    return std::vector<uint8_t>(buf.Data(), buf.Data() + buf.Length());
+};
+
 typedef enum {
     RANDOMX_LIGHT = 0,
     RANDOMX_FAST = 1,
