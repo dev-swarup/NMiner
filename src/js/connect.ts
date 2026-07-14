@@ -21,7 +21,7 @@ export type StratumJob = {
     job_id: string;
     seed_hash: string;
 
-    algo?: number;
+    algo?: string;
     height?: number;
 };
 
@@ -175,10 +175,10 @@ export class StratumClient extends EventEmitter<{
         return job;
     };
 
-    public async submit(job_id: string, nonce: string, result: string, target?: string, height?: number): Promise<string | null> {
+    public async submit(job_id: string, nonce: string, result: string): Promise<string | null> {
         if (this.closed) return Promise.reject(new Error("Cannot submit job: the stratum connection is closed."));
 
-        return this.send("submit", this.isWebSocket ? [job_id, nonce, result, target, height] : { id: this.session, job_id, nonce, result }).then(() => target) as any;
+        return this.send("submit", this.isWebSocket ? [job_id, nonce, result] : { id: this.session, job_id, nonce, result });
     };
 
     public close() {
