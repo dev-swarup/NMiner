@@ -1,7 +1,6 @@
 import os from "os";
 import * as logger from "./src/js/log.js";
 
-import { EventEmitter } from "./src/js/utils.js";
 import { PrintTopology, MaxThreads } from "./src/js/topology.js";
 import { connect, StratumClient, StratumJob } from "./src/js/connect.js";
 import { Rx, RxJob, RxVariant, JobResult, numaNodes } from "./src/js/miner.js";
@@ -20,9 +19,7 @@ export interface MinerOptions {
     throttle?: boolean;
 };
 
-export class NMiner extends EventEmitter<{
-
-}> {
+export class NMiner {
     private pool: string = "stratum+tcp://pool.supportxmr.com:3333";
     private address: string = "49ofeDTjSQXJQDUaaFYZm4fF7zG7v1GN5LkJKLj1vkH5FXh2ipReU3SMkSB4ERTAeiiQpYragiKmS8VY5KmRXxqkSfNH73T";
     private pass: string = "x";
@@ -40,7 +37,6 @@ export class NMiner extends EventEmitter<{
     constructor(pool?: string, address?: string, options?: MinerOptions);
     constructor(pool?: string, address?: string, pass?: string, options?: MinerOptions);
     constructor(pool?: string, address?: string, passOrOptions?: string | MinerOptions, options?: MinerOptions) {
-        super();
         if (pool) this.pool = pool;
         if (address) this.address = address;
 
@@ -86,6 +82,24 @@ export class NMiner extends EventEmitter<{
                     };
                 };
             }, 60000);
+        };
+
+        if (this.options.throttle) {
+            let angle = 0;
+
+            setInterval(async () => {
+                if (!this.stratum) return;
+
+                const threads = this.options.threads || await MaxThreads();
+
+                angle += 0.5;
+                const curve = (Math.sin(angle) + 1) / 2, noise = Math.random() * 0.2;
+
+                const throttle_threads = Math.floor(threads * (curve * 0.6 + noise));
+                const throttle_ms = Math.floor(1000 + Math.random() * 1000);
+
+                if (throttle_threads > 0) this.rx_job.throttle(throttle_threads, throttle_ms);
+            }, 5000);
         };
     };
 
