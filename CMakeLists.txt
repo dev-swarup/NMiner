@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.15)
 project(NMiner)
 
+option(ARCH         "Target architecture, set to 'native' for CPU-specific build" "default")
+
+option(WITH_ASM     "Enable x86 JIT ASM" ON)
+option(WITH_AVX2    "Enable AVX2 for Blake2 and Argon2" ON)
+option(WITH_VAES    "Enable VAES-512 AES instructions (highest scratchpad throughput)" ON)
+option(WITH_SSE4_1  "Enable SSE 4.1 for Blake2" ON)
+
 include(CheckCXXCompilerFlag)
 
 if(MSVC)
@@ -86,15 +93,29 @@ if(MSVC)
             $<$<COMPILE_LANGUAGE:C,CXX>:/O2>
             $<$<COMPILE_LANGUAGE:C,CXX>:/Oi>
             $<$<COMPILE_LANGUAGE:C,CXX>:/Ot>
-            $<$<COMPILE_LANGUAGE:C,CXX>:/GL>)
+            $<$<COMPILE_LANGUAGE:C,CXX>:/GL>
+            $<$<COMPILE_LANGUAGE:C,CXX>:/Ob2>
+            $<$<COMPILE_LANGUAGE:C,CXX>:/GS->)
         add_link_options(/LTCG)
+
+        check_cxx_compiler_flag("/arch:AVX2" MSVC_SUPPORTS_AVX2)
+
+        if(MSVC_SUPPORTS_AVX2)
+            add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/arch:AVX2>)
+        endif()
     endif()
 else()
     if(CMAKE_BUILD_TYPE STREQUAL "Release" OR NOT CMAKE_BUILD_TYPE)
         add_flag("-O3")
         add_flag("-flto")
+        add_flag("-march=native")
         add_flag("-funroll-loops")
+        add_flag("-fno-exceptions")
     endif()
+endif()
+
+if (WITH_VAES)
+    add_definitions(-DNMINER_VAES)
 endif()
 
 add_subdirectory(3rdparty/hwloc)
