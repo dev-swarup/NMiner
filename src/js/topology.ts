@@ -46,3 +46,9 @@ export async function PrintTopology(): Promise<void> {
 
     process.stdout.write("\n");
 };
+
+export async function MaxThreads(): Promise<number> {
+    const cpu = await si.cpu();
+
+    return Math.min(cpu.cache.l3 / 1024 / 1024 / 2, cpu.cores);
+};
