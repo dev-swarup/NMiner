@@ -147,8 +147,8 @@ export class StratumClient extends EventEmitter<{
     };
 
     public async login(address: string, pass: string = "x"): Promise<StratumJob> {
-        const algorithms = ["rx/0", "rx/monero", "rx/wow", "rx/arq", "rx/sfx", "rx/yada", "rx/graft"],
-            params: any = this.isWebSocket ? [address, pass] : { pass, login: address, algo: algorithms, agent: `nodejs / v${version}`, extensions: ["nicehash", "keepalive"] };
+        /// @ts-ignore
+        const algorithms = ["rx/0", "rx/monero"], params: any = this.isWebSocket ? [address, pass] : { pass, login: address, algo: algorithms, agent: `${process.isBun ? "bun" : "nodejs"} / v${version}`, extensions: ["nicehash", "keepalive"] };
 
         const result = await this.send("login", params);
 
