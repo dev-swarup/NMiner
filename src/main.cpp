@@ -134,7 +134,7 @@ Napi::Value HugePages(const Napi::CallbackInfo &info)
     std::ofstream nr_hugepages("/proc/sys/vm/nr_hugepages");
     if (nr_hugepages) nr_hugepages << numPages;
 
-    return Napi::Number::New(env, CheckLargePagesSupport() ? 0 : -1);
+    return Napi::Number::New(env, LargePagesSupported() ? 0 : -1);
 #endif
 };
 

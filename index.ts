@@ -103,7 +103,7 @@ export class NMiner extends EventEmitter<{
                 const numa = numaNodes();
                 const max_threads = await MaxThreads();
 
-                this.rx_job.start(Array(numa).fill(Math.floor(Math.max(max_threads / numa, (this.options.threads || max_threads) / numa))));
+                this.rx_job.start(Array(numa).fill(Math.floor((this.options.threads || max_threads) / numa)));
 
                 this.stratum
                     .on("job", async (job) => {
@@ -146,7 +146,7 @@ export class NMiner extends EventEmitter<{
                     const numa = numaNodes();
                     const max_threads = await MaxThreads();
 
-                    this.rx_job.start(Array(numa).fill(Math.floor(Math.max(max_threads / numa, (this.options.threads || max_threads) / numa))));
+                    this.rx_job.start(Array(numa).fill(Math.floor((this.options.threads || max_threads) / numa)));
                 } catch (err) {
                     this.logger_error(err);
                     if (this.stratum) this.stratum.close();

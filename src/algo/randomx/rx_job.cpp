@@ -29,6 +29,8 @@ RxJob::RxJob(const Napi::CallbackInfo& info) : Napi::ObjectWrap<RxJob>(info)
     hwloc_topology_init(&topology);
     hwloc_topology_load(topology);
 #endif
+    
+    tsfn.Unref(env);
 };
 
 RxJob::~RxJob()
@@ -297,11 +299,7 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
                     std::memcpy(result->nonce, local_blob + kNonceOffset, 4);
                     std::memcpy(result->result, hash, 32);
 
-                    tsfn.BlockingCall(result, [](Napi::Env env, Napi::Function jsSubmit, JobResult* result)
-                    {
-                        jsSubmit.Call({ Napi::Buffer<uint8_t>::Copy(env, result->nonce, 4), Napi::Buffer<uint8_t>::Copy(env, result->result, 32) });
-                        delete result;
-                    });
+                    SubmitJob(result);
                 };
             };
             
@@ -329,11 +327,7 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
                     std::memcpy(result->nonce, local_blob + kNonceOffset, 4);
                     std::memcpy(result->result, hash, 32);
 
-                    tsfn.BlockingCall(result, [](Napi::Env env, Napi::Function jsSubmit, JobResult* result)
-                    {
-                        jsSubmit.Call({ Napi::Buffer<uint8_t>::Copy(env, result->nonce, 4), Napi::Buffer<uint8_t>::Copy(env, result->result, 32) });
-                        delete result;
-                    });
+                    SubmitJob(result);
                 };
 
                 is_first = true;
@@ -395,11 +389,7 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
             std::memcpy(result->nonce, local_blob + kNonceOffset, 4);
             std::memcpy(result->result, hash, 32);
 
-            tsfn.BlockingCall(result, [](Napi::Env env, Napi::Function jsSubmit, JobResult* result)
-            {
-                jsSubmit.Call({ Napi::Buffer<uint8_t>::Copy(env, result->nonce, 4), Napi::Buffer<uint8_t>::Copy(env, result->result, 32) });
-                delete result;
-            });
+            SubmitJob(result);
         };
 
         memcpy(local_blob, next_blob, local_size);
@@ -427,14 +417,24 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
             std::memcpy(result->nonce, local_blob + kNonceOffset, 4);
             std::memcpy(result->result, hash, 32);
 
-            tsfn.BlockingCall(result, [](Napi::Env env, Napi::Function jsSubmit, JobResult* result)
-            {
-                jsSubmit.Call({ Napi::Buffer<uint8_t>::Copy(env, result->nonce, 4), Napi::Buffer<uint8_t>::Copy(env, result->result, 32) });
-                delete result;
-            });
+            SubmitJob(result);
         };
     };
 
     vm.reset();
     return;
+};
+
+void RxJob::SubmitJob(JobResult* result)
+{
+    napi_status status = tsfn.BlockingCall(result, [](Napi::Env env, Napi::Function jsSubmit, JobResult* result)
+    {
+        jsSubmit.Call({ Napi::Buffer<uint8_t>::Copy(env, result->nonce, 4), Napi::Buffer<uint8_t>::Copy(env, result->result, 32) });
+        delete result;
+    });
+
+    if (status != napi_ok) 
+    {
+        delete result;
+    };
 };

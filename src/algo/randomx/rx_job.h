@@ -59,6 +59,7 @@ public:
     Napi::Value Stop(const Napi::CallbackInfo& info);
 
 private:
+    void SubmitJob(JobResult* result);
     void Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node);
     void StopLoop();
 
