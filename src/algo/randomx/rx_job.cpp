@@ -80,9 +80,9 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo& info)
     Napi::Env env = info.Env();
     Napi::Object exports = Napi::Object::New(env);
 
-    if (info.Length() != 3 || !info[0].IsBuffer() || !info[1].IsBuffer() || !info[2].IsBoolean()) 
+    if (info.Length() < 4 || !info[0].IsBuffer() || !info[1].IsBuffer() || !info[2].IsBoolean() || !info[3].IsBoolean()) 
     {
-        Napi::Error::New(env, "Expected blob, target and reset nonce").ThrowAsJavaScriptException();
+        Napi::Error::New(env, "Expected blob, target, nicehash mode and reset nonce").ThrowAsJavaScriptException();
         return env.Null();
     };
 
@@ -111,8 +111,14 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo& info)
     uint64_t new_target = 0xFFFFFFFFFFFFFFFFULL / (0xFFFFFFFFULL / uint64_t(*reinterpret_cast<const uint32_t *>(raw)));
     uint64_t new_diff = static_cast<uint64_t>(0xFFFFFFFFFFFFFFFFULL / new_target);
 
-    bool reset_nonce = info[2].As<Napi::Boolean>().ToBoolean();
+    uint32_t start_nonce = 0, nonce_limit = 0xFFFFFFFF;
+    if (info.Length() > 4 && info[4].IsNumber())
+        start_nonce = info[4].As<Napi::Number>().Uint32Value();
 
+    if (info.Length() > 5 && info[5].IsNumber())
+        nonce_limit = info[5].As<Napi::Number>().Uint32Value();
+    
+    bool reset_nonce = info[3].As<Napi::Boolean>().ToBoolean();
     {
         std::lock_guard<std::mutex> lock(m_job_mutex);
 
@@ -121,11 +127,17 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo& info)
 
         m_diff = new_diff;
         m_target = new_target;
-        m_nicehash = readUnaligned(reinterpret_cast<uint32_t *>(m_blob + kNonceOffset)) != 0;
+        m_nicehash = info[2].As<Napi::Boolean>().ToBoolean() || (readUnaligned(reinterpret_cast<uint32_t *>(m_blob + kNonceOffset)) != 0);
         
-        if (reset_nonce) 
+        if (reset_nonce && info.Length() == 4) 
         {
             m_nonce_counter.store(0, std::memory_order_relaxed);
+            m_nonce_limit.store(0xFFFFFFFF, std::memory_order_relaxed);
+        }
+        else if (info.Length() > 4)
+        {
+            m_nonce_counter.store(start_nonce, std::memory_order_relaxed);
+            m_nonce_limit.store(nonce_limit, std::memory_order_relaxed);
         };
 
         m_job_version.fetch_add(1, std::memory_order_release);
@@ -314,7 +326,7 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
             is_first = true; 
         };
 
-        if (m_paused.load(std::memory_order_relaxed) || local_size == 0) 
+        if (m_paused.load(std::memory_order_relaxed) || local_size == 0 || m_nonce_counter.load(std::memory_order_relaxed) >= m_nonce_limit.load(std::memory_order_relaxed)) 
         {
             if (!is_first && local_size > 0) 
             {
@@ -334,9 +346,9 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
             };
 
             std::unique_lock<std::mutex> cv_lock(m_cv_mutex);
-            m_cv.wait_for(cv_lock, std::chrono::milliseconds(100), [this, local_version]() 
+            m_cv.wait_for(cv_lock, std::chrono::milliseconds(250), [this, local_version]() 
             {
-                return !m_active.load(std::memory_order_relaxed) || rx->updating.load(std::memory_order_acquire) || (!m_paused.load(std::memory_order_relaxed) && (m_size > 0 || m_job_version.load(std::memory_order_acquire) != local_version));
+                return !m_active.load(std::memory_order_relaxed) || rx->updating.load(std::memory_order_acquire) || (!m_paused.load(std::memory_order_relaxed) && m_size > 0 && m_nonce_counter.load(std::memory_order_relaxed) < m_nonce_limit.load(std::memory_order_relaxed) || m_job_version.load(std::memory_order_acquire) != local_version);
             });
 
             continue;
@@ -383,7 +395,7 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
         m_hashes_calculated.fetch_add(1, std::memory_order_relaxed);
 
         uint64_t hash64 = readUnaligned(reinterpret_cast<uint64_t*>(hash + 24));
-        if (hash64 <= local_target) 
+        if (hash64 <= local_target) [[unlikely]]
         {           
             JobResult* result = new JobResult();
             std::memcpy(result->nonce, local_blob + kNonceOffset, 4);
@@ -394,14 +406,17 @@ void RxJob::Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node)
 
         memcpy(local_blob, next_blob, local_size);
 
-        uint32_t throttle_count = m_throttle_count.load(std::memory_order_relaxed);
-        while (throttle_count > 0)
+        if (m_throttle_count.load(std::memory_order_relaxed) > 0) [[unlikely]]
         {
-            if (m_throttle_count.compare_exchange_weak(throttle_count, throttle_count - 1, std::memory_order_relaxed)) 
+            uint32_t prev = m_throttle_count.fetch_sub(1, std::memory_order_relaxed);
+            if (prev > 0)
             {
                 uint32_t time = m_throttle_time.load(std::memory_order_relaxed);
                 std::this_thread::sleep_for(std::chrono::milliseconds(time));
-                break;
+            }
+            else
+            {
+                m_throttle_count.fetch_add(1, std::memory_order_relaxed);
             };
         };
     };

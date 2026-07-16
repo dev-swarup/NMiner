@@ -79,6 +79,7 @@ private:
     std::mutex m_job_mutex;
     std::atomic<uint32_t> m_job_version {0};
     std::atomic<uint32_t> m_nonce_counter {0};
+    std::atomic<uint32_t> m_nonce_limit {0xFFFFFFFF};
     std::atomic<uint64_t> m_hashes_calculated {0};
 
     std::atomic<uint32_t> m_throttle_time {0};

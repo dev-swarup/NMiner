@@ -105,6 +105,10 @@ void AllocateWorker::Execute()
             std::vector<std::thread> threads;
             threads.reserve(num_pus);
 
+            hwloc_topology_t thread_topology;
+            hwloc_topology_init(&thread_topology);
+            hwloc_topology_load(thread_topology);
+
             for (int i = 0; i < num_pus; ++i) 
             {
                 const uint32_t start = static_cast<uint32_t>((dataset_count * i) / num_pus);
@@ -114,12 +118,8 @@ void AllocateWorker::Execute()
                 hwloc_obj_t pu = node_obj ? hwloc_get_obj_inside_cpuset_by_type(topology, node_obj->cpuset, HWLOC_OBJ_PU, i) : hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, i);
                 uint32_t core_id = pu ? pu->os_index : 0;
 
-                threads.emplace_back([this, numa_node, start, size, core_id]() 
+                threads.emplace_back([this, numa_node, start, size, core_id, thread_topology]() 
                 {
-                    hwloc_topology_t thread_topology;
-                    hwloc_topology_init(&thread_topology);
-                    hwloc_topology_load(thread_topology);
-
                     hwloc_obj_t thread_pu = hwloc_get_obj_by_type(thread_topology, HWLOC_OBJ_PU, core_id);
                     if (thread_pu) hwloc_set_cpubind(thread_topology, thread_pu->cpuset, HWLOC_CPUBIND_THREAD);
 
@@ -132,8 +132,6 @@ void AllocateWorker::Execute()
                     {
                         randomx_init_dataset(rx->datasets[numa_node], rx->cache, start, size);
                     };
-                    
-                    hwloc_topology_destroy(thread_topology);
                 });
             };
 
@@ -141,6 +139,8 @@ void AllocateWorker::Execute()
             {
                 if (t.joinable()) t.join();
             };
+
+            hwloc_topology_destroy(thread_topology);
         };
 
         hwloc_topology_destroy(topology);

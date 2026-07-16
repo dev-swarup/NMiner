@@ -24,7 +24,7 @@ export class RxJob {
     public throttle(threads: number, ms: number): void;
     
     public get_hashes(): number;
-    public send_job(blob: Buffer, diff: Buffer, reset_nonce: boolean): JobResult;
+    public send_job(blob: Buffer, diff: Buffer, nicehash: boolean, reset_nonce: boolean, start_nonce?: number, nonce_limit?: number): JobResult;
 }
 
 export function numaNodes(): number;
