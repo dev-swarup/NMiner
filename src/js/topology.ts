@@ -1,17 +1,34 @@
 import si from "systeminformation";
-import * as logger from "./log.js";
+import * as logger from "./logger.js";
 
 import { version } from "../../package.json";
 import { numaNodes, hugePages } from "./miner.js";
 
+let _numa: number | null = null;
+let _cpuCache: Awaited<ReturnType<typeof si.cpu>> | null = null;
+
+async function getCpu() {
+    if (_cpuCache) return _cpuCache;
+
+    _cpuCache = await si.cpu();
+    return _cpuCache;
+};
+
+export function getNumaNodes(): number {
+    if (_numa !== null) return _numa;
+
+    _numa = numaNodes();
+    return _numa;
+};
+
 export async function PrintTopology(): Promise<void> {
     const topology: Array<[string, string | Array<string>]> = [];
-    const [cpu, system, motherboard, mem, memLayout] = await Promise.all([si.cpu(), si.system(), si.baseboard(), si.mem(), si.memLayout()]);
+    const [cpu, system, motherboard, mem, memLayout] = await Promise.all([getCpu(), si.system(), si.baseboard(), si.mem(), si.memLayout()]);
 
     /// @ts-ignore
     topology.push(["ABOUT", logger.CYAN(`NMiner/v${version}`) + " " + logger.WHITE(process.isBun ? `Bun/v${process.versions.bun}` : `Node.js/${process.version}`)]);
 
-    const numa_nodes = numaNodes();
+    const numa_nodes = getNumaNodes();
     const huge_pages = hugePages(numa_nodes);
 
     topology.push(["HUGE PAGES", (huge_pages === 0 ? logger.GREEN("permission granted") : huge_pages === 1 ? logger.YELLOW("restart required") : logger.RED("not supported")) + "\n"]);
@@ -48,7 +65,6 @@ export async function PrintTopology(): Promise<void> {
 };
 
 export async function MaxThreads(): Promise<number> {
-    const cpu = await si.cpu();
-
+    const cpu = await getCpu();
     return Math.min(cpu.cache.l3 / 1024 / 1024 / 2, cpu.cores);
 };
