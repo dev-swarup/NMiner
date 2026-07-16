@@ -35,6 +35,8 @@ set(SOURCES
 
 if (WIN32)
     list(APPEND SOURCES src/topology-windows.c)
+else()
+    list(APPEND SOURCES src/topology-linux.c)
 endif()
 
 add_library(hwloc STATIC
