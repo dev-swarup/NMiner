@@ -9,9 +9,24 @@ import { version } from "../../package.json";
 import { EventEmitter } from "./utils.js";
 import { hash, encrypt, decrypt, createExchange } from "./crypto.js";
 
+const _dnsCache = new Map<string, string>();
 function ResolveHostname(hostname: string): Promise<string> {
+    const cached = _dnsCache.get(hostname);
+    if (cached) return Promise.resolve(cached);
+
+    if ((process as any).isBun && (dns as any).lookup?.length === 0)
+        return (dns as any).lookup(hostname, { family: 4 }).then((res: any) => {
+            const addr: string = res?.address ?? hostname;
+            _dnsCache.set(hostname, addr);
+
+            return addr;
+        }).catch(() => hostname);
+
     return new Promise((resolve) => dns.lookup(hostname, { family: 4 }, (err, address) => {
-        resolve(err || !address ? hostname : address);
+        const addr = err || !address ? hostname : address;
+        _dnsCache.set(hostname, addr);
+
+        resolve(addr);
     }));
 };
 
@@ -33,6 +48,7 @@ export class StratumClient extends EventEmitter<{
     public host: string;
     public remoteAddress: string;
 
+    private keepalive: boolean;
     private isWebSocket: boolean;
     private socket: net.Socket | WebSocket;
 
@@ -41,10 +57,11 @@ export class StratumClient extends EventEmitter<{
     private promises: Map<number, { resolve: Function, reject: Function, timeout: NodeJS.Timeout }> = new Map();
     private keepaliveInterval?: NodeJS.Timeout;
 
-    constructor(isWebSocket: boolean, host: string, remoteAddress: string, socket: net.Socket | WebSocket) {
+    constructor(isWebSocket: boolean, host: string, remoteAddress: string, socket: net.Socket | WebSocket, _keepalive: boolean = false) {
         super();
         this.host = host;
         this.socket = socket;
+        this.keepalive = _keepalive;
         this.isWebSocket = isWebSocket;
         this.remoteAddress = remoteAddress;
 
@@ -57,7 +74,7 @@ export class StratumClient extends EventEmitter<{
                         let parsed: any = data.toString();
                         if ((ws as any).session) parsed = decrypt((ws as any).session, parsed);
 
-                        if (Array.isArray(parsed) && typeof parsed[0] === "string" && parsed[0] === "job")
+                        if (Array.isArray(parsed) && parsed[0] === "job")
                             return this.emit("job", parsed[1]);
 
                         if (Array.isArray(parsed) && this.promises.has(parsed[0])) {
@@ -80,37 +97,65 @@ export class StratumClient extends EventEmitter<{
                 .on("close", () => this.handleClose())
                 .on("error", () => this.handleClose());
 
-            let lineBuffer = "";
-            tcp.on("data", (raw) => {
-                lineBuffer += raw.toString();
-                const lines = lineBuffer.split("\n");
+            const chunks: Buffer[] = [];
+            let totalLen = 0;
 
-                lineBuffer = lines.pop() || "";
+            tcp.on("data", (raw: Buffer) => {
+                let scanStart = 0;
 
-                for (const line of lines) {
+                while (true) {
+                    const nlPos = raw.indexOf(0x0a, scanStart);
+
+                    if (nlPos === -1) {
+                        if (scanStart === 0) {
+                            chunks.push(raw);
+                            totalLen += raw.length;
+                        } else {
+                            const tail = raw.subarray(scanStart);
+                            if (tail.length > 0) {
+                                chunks.push(tail);
+                                totalLen += tail.length;
+                            }
+                        };
+
+                        break;
+                    };
+                    const slice = raw.subarray(scanStart, nlPos);
+                    let line: string;
+
+                    if (chunks.length === 0)
+                        line = slice.toString("utf8");
+                    else {
+                        chunks.push(slice);
+                        totalLen += slice.length;
+                        line = Buffer.concat(chunks, totalLen).toString("utf8");
+                        chunks.length = 0;
+                        totalLen = 0;
+                    };
+
                     const trimmed = line.trim();
-                    if (!trimmed) continue;
+                    if (trimmed) {
+                        try {
+                            const data = JSON.parse(trimmed);
 
-                    try {
-                        const data = JSON.parse(trimmed);
+                            if ("method" in data) {
+                                if (data.method === "job") this.emit("job", data.params);
+                            } else if (this.promises.has(data.id)) {
+                                const promise = this.promises.get(data.id)!;
+                                clearTimeout(promise.timeout);
 
-                        if ("method" in data) {
-                            if (data.method === "job") this.emit("job", data.params);
-                            continue;
-                        };
+                                if (data.error != null && data.error.message)
+                                    promise.reject(new Error(data.error.message));
+                                else
+                                    promise.resolve(data.result);
 
-                        if (this.promises.has(data.id)) {
-                            const promise = this.promises.get(data.id)!;
-                            clearTimeout(promise.timeout);
+                                this.promises.delete(data.id);
+                            };
+                        } catch { };
+                    };
 
-                            if (data.error != null && data.error.message)
-                                promise.reject(new Error(data.error.message));
-                            else
-                                promise.resolve(data.result);
-
-                            this.promises.delete(data.id);
-                        };
-                    } catch { };
+                    scanStart = nlPos + 1;
+                    if (scanStart >= raw.length) break;
                 };
             });
         };
@@ -153,14 +198,14 @@ export class StratumClient extends EventEmitter<{
         const result = await this.send("login", params);
 
         this.session = result.id;
-        this.keepaliveInterval = setInterval(async () => {
-            try {
-                if (this.isWebSocket)
-                    await this.send("keepalived", this.session);
-                else if (result.extensions && Array.isArray(result.extensions) && result.extensions.includes("keepalive"))
-                    await this.send("keepalive", { id: this.session });
-            } catch { };
-        }, 60000);
+        this.keepalive = this.isWebSocket || this.keepalive || (result.extensions && Array.isArray(result.extensions) && result.extensions.includes("keepalive"));
+
+        if (this.keepalive)
+            this.keepaliveInterval = setInterval(async () => {
+                try {
+                    await this.send("keepalived", { id: this.session });
+                } catch (err: any) { if (err.message && err.message !== "Stratum request timed out after 30000ms.") this.close(); };
+            }, 60000);
 
         const job: StratumJob = {
             blob: result.job.blob,
@@ -285,7 +330,7 @@ async function Wss(url: string, agent?: string): Promise<{ socket: WebSocket, re
 
         socket.on("open", () => {
             resolved = true;
-            setTimeout(() => resolve({ socket, remoteAddress }), 100);
+            resolve({ socket, remoteAddress });
         });
 
         socket.on("error", (err) => {
@@ -304,11 +349,11 @@ async function Wss(url: string, agent?: string): Promise<{ socket: WebSocket, re
     });
 };
 
-export async function connect(url: string, agent?: string): Promise<StratumClient> {
+export async function connect(url: string, agent?: string, keepalive?: boolean): Promise<StratumClient> {
     const u = new URL(url), isWebSocket = ["ws:", "wss:"].includes(u.protocol), connection: {
         socket: net.Socket | WebSocket,
         remoteAddress: string
     } = isWebSocket ? await Wss(url, agent) : await Tcp(u.protocol, u.hostname, parseInt(u.port) || 3333, agent);
 
-    return new StratumClient(isWebSocket, isWebSocket ? u.hostname : u.host, connection.remoteAddress, connection.socket);
+    return new StratumClient(isWebSocket, isWebSocket ? u.hostname : u.host, connection.remoteAddress, connection.socket, keepalive);
 };
