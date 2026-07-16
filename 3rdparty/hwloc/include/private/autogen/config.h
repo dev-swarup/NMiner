@@ -543,6 +543,7 @@
 #define HWLOC_LINUX_SYS 1
 #define HAVE_SYS_UTSNAME_H 1
 #define HWLOC_HAVE_SYSCALL 1
+#define HAVE_SYS_MMAN_H 1
 #define RUNSTATEDIR "/var/run"
 #endif
 
