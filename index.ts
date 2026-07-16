@@ -58,12 +58,12 @@ export class NMiner {
                     await this.stratum.submit(this.m_job.job_id, nonce.toString("hex"), result.toString("hex"));
 
                     this.accepted++;
-                    logger.Print(logger.CYAN_BOLD(" cpu     "), `${logger.GREEN("accepted")} (${this.accepted}/${(this.rejected > 0 ? logger.RED : logger.WHITE)(String(this.rejected))}) diff ${logger.WHITE_BOLD(String(this.m_job.diff))} ${logger.GetTime(time)}`);
+                    logger.Print(logger.CYAN_BG(" cpu     "), `${logger.GREEN("accepted")} (${this.accepted}/${(this.rejected > 0 ? logger.RED : logger.WHITE)(String(this.rejected))}) diff ${logger.WHITE_BOLD(String(this.m_job.diff))} ${logger.GetTime(time)}`);
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
 
                     this.rejected++;
-                    logger.Print(logger.CYAN_BOLD(" cpu     "), `${logger.RED("rejected")} (${this.accepted}/${logger.RED(String(this.rejected))}) ${logger.RED(msg)}`);
+                    logger.Print(logger.CYAN_BG(" cpu     "), `${logger.RED("rejected")} (${this.accepted}/${logger.RED(String(this.rejected))}) ${logger.RED(msg)}`);
                 };
         });
 
@@ -81,7 +81,7 @@ export class NMiner {
                         const diff = (current_hashes - last_hashes) / 60;
                         last_hashes = current_hashes;
 
-                        logger.Print(logger.CYAN_BOLD(" cpu     "), `speed ${logger.CYAN_BOLD(" cpu ")} ${PrintHashes(diff)}`);
+                        logger.Print(logger.CYAN_BG(" cpu     "), `speed ${logger.CYAN_BG(" cpu ")} ${PrintHashes(diff)}`);
                     };
                 };
             }, 60000);
@@ -109,7 +109,7 @@ export class NMiner {
     private async reconnect() {
         try {
             this.stratum = await connect(this.pool, this.options?.proxy, this.options?.keepalive);
-            if (this.options.logging) logger.Print(logger.BLUE_BOLD(" net     "), `use pool ${logger.CYAN(`${this.stratum.host}`)} ${logger.GRAY(this.stratum.remoteAddress)}`);
+            if (this.options.logging) logger.Print(logger.BLUE_BG(" net     "), `use pool ${logger.CYAN(`${this.stratum.host}`)} ${logger.GRAY(this.stratum.remoteAddress)}`);
 
             const numa = getNumaNodes();
             const max_threads = await MaxThreads();
@@ -187,21 +187,21 @@ export class NMiner {
     };
 
     private logger_dataset_init(seed_hash: string) {
-        if (this.options.logging) logger.Print(logger.CYAN_BOLD(" randomx "), `${logger.MAGENTA("init dataset")} algo ${logger.WHITE_BOLD(this.options.algo as string)} (${logger.WHITE_BOLD(String(os.cpus().length))} threads) seed ${logger.WHITE_BOLD(seed_hash.substring(0, 16) + "...")}`);
+        if (this.options.logging) logger.Print(logger.CYAN_BG(" randomx "), `${logger.MAGENTA("init dataset")} algo ${logger.WHITE_BOLD(this.options.algo as string)} (${logger.WHITE_BOLD(String(os.cpus().length))} threads) seed ${logger.WHITE_BOLD(seed_hash.substring(0, 16) + "...")}`);
     };
 
     private logger_dataset_ready(time: number) {
-        if (this.options.logging) logger.Print(logger.CYAN_BOLD(" randomx "), `${logger.GREEN("dataset ready")} ${logger.GRAY(`(${time} ms)`)}`);
+        if (this.options.logging) logger.Print(logger.CYAN_BG(" randomx "), `${logger.GREEN("dataset ready")} ${logger.GRAY(`(${time} ms)`)}`);
     };
 
     private logger_new_job(diff: number, height?: number, txnCount?: number) {
-        if (this.options.logging) logger.Print(logger.BLUE_BOLD(" net     "), `${logger.MAGENTA("new job")} from ${this.stratum?.host} diff ${logger.WHITE_BOLD(PrintDiff(diff) as string)} algo ${logger.WHITE_BOLD(this.options.algo as string)}` + `${height ? ` height ${logger.WHITE_BOLD(height as any)}` : ""}` + `${txnCount && txnCount > 0 ? ` (${txnCount} tx)` : ""}`);
+        if (this.options.logging) logger.Print(logger.BLUE_BG(" net     "), `${logger.MAGENTA("new job")} from ${this.stratum?.host} diff ${logger.WHITE_BOLD(PrintDiff(diff) as string)} algo ${logger.WHITE_BOLD(this.options.algo as string)}` + `${height ? ` height ${logger.WHITE_BOLD(height as any)}` : ""}` + `${txnCount && txnCount > 0 ? ` (${txnCount} tx)` : ""}`);
     };
 
     private logger_error(err: any) {
         if (!this.options.logging) return;
 
         const msg = err instanceof Error ? err.message : String(err);
-        logger.Print(logger.MAGENTA_BOLD(" program "), logger.RED(`error: ${msg}`));
+        logger.Print(logger.MAGENTA_BG(" program "), logger.RED(`error: ${msg}`));
     };
 };
