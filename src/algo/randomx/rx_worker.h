@@ -2,20 +2,20 @@
 #include "rx.h"
 #include "rx_job.h"
 
-class AllocateWorker : public Napi::AsyncWorker {
+class AllocateWorker : public Napi::AsyncWorker
+{
 public:
-    AllocateWorker(Napi::Env env, Rx* rx, std::vector<uint8_t> seed_hash, std::string variant);
-    ~AllocateWorker();
+    AllocateWorker(Napi::Env env, Rx *rx, std::vector<uint8_t> seed_hash, std::string variant);
 
-    void Execute() override;
-
-    void OnOK() override;
-    void OnError(const Napi::Error& e) override;
+    void Execute()                       override;
+    void OnOK()                          override;
+    void OnError(const Napi::Error &err) override;
 
     Napi::Promise GetPromise();
 
 private:
-    Rx* rx;
+    Rx *rx;
+
     bool result;
     std::string variant;
     std::vector<uint8_t> seed_hash;
