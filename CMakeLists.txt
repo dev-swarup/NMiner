@@ -110,7 +110,6 @@ else()
         add_flag("-flto")
         add_flag("-march=native")
         add_flag("-funroll-loops")
-        add_flag("-fno-exceptions")
     endif()
 endif()
 
@@ -130,3 +129,7 @@ endif()
 
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES PREFIX "" SUFFIX ".node")
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NAPI_DISABLE_CPP_EXCEPTIONS HAVE_HWLOC=1)
+
+if(NOT MSVC)
+    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+endif()

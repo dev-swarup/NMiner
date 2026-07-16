@@ -87,6 +87,13 @@ if (CMAKE_CXX_COMPILER_ID MATCHES GNU OR CMAKE_CXX_COMPILER_ID MATCHES Clang)
     set_source_files_properties(${RANDOMX_INCLUDE}/dataset.cpp               PROPERTIES COMPILE_FLAGS "-Ofast")
     set_source_files_properties(${RANDOMX_INCLUDE}/aes_hash.cpp              PROPERTIES COMPILE_FLAGS "-Ofast")
     set_source_files_properties(${RANDOMX_INCLUDE}/instructions_portable.cpp PROPERTIES COMPILE_FLAGS "-Ofast -fno-tree-vectorize")
+
+    set_source_files_properties(${RANDOMX_INCLUDE}/allocator.cpp             PROPERTIES COMPILE_FLAGS "-fexceptions")
+    set_source_files_properties(${RANDOMX_INCLUDE}/randomx.cpp               PROPERTIES COMPILE_FLAGS "-fexceptions")
+    set_source_files_properties(${RANDOMX_INCLUDE}/vm_interpreted.cpp        PROPERTIES COMPILE_FLAGS "-fexceptions")
+    set_source_files_properties(${RANDOMX_INCLUDE}/vm_interpreted_light.cpp  PROPERTIES COMPILE_FLAGS "-fexceptions")
+    set_source_files_properties(${RANDOMX_INCLUDE}/vm_compiled.cpp           PROPERTIES COMPILE_FLAGS "-fexceptions")
+    set_source_files_properties(${RANDOMX_INCLUDE}/vm_compiled_light.cpp     PROPERTIES COMPILE_FLAGS "-fexceptions")
 endif()
 
 if (WITH_SSE4_1)
