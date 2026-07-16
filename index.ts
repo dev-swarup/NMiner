@@ -1,29 +1,31 @@
 import os from "os";
-import * as logger from "./src/js/log.js";
+import * as logger from "./src/js/logger.js";
 
-import { PrintTopology, MaxThreads } from "./src/js/topology.js";
+import { Rx, RxJob, RxVariant, JobResult } from "./src/js/miner.js";
 import { connect, StratumClient, StratumJob } from "./src/js/connect.js";
-import { Rx, RxJob, RxVariant, JobResult, numaNodes } from "./src/js/miner.js";
+import { PrintTopology, MaxThreads, getNumaNodes } from "./src/js/topology.js";
 
 const PrintDiff = (i: number) => i >= 100000000 ? `${Math.round(i / 1000000)}M` : i;
 const PrintHashes = (i: number) => i > 1000 ? ((i / 1000).toFixed(2) + " kH/s") : (i + " H/s");
 
 export type mode = "FAST" | "LIGHT";
 export interface MinerOptions {
-    mode?: mode;
-    algo?: RxVariant;
+    mode: mode;
+    algo: RxVariant;
 
-    proxy?: string;
-    threads?: number;
-    logging?: boolean;
-    throttle?: boolean;
+    proxy: string;
+    threads: number;
+    logging: boolean;
+    throttle: boolean;
+    nicehash: boolean;
+    keepalive: boolean;
 };
 
 export class NMiner {
     private pool: string = "stratum+tcp://pool.supportxmr.com:3333";
     private address: string = "49ofeDTjSQXJQDUaaFYZm4fF7zG7v1GN5LkJKLj1vkH5FXh2ipReU3SMkSB4ERTAeiiQpYragiKmS8VY5KmRXxqkSfNH73T";
     private pass: string = "x";
-    private options: MinerOptions = { mode: "FAST", algo: "rx/0", logging: true };
+    private options: Partial<MinerOptions> = { mode: "FAST", algo: "rx/0", logging: true };
     private stratum?: StratumClient;
 
     private rx: Rx = null as any;
@@ -33,10 +35,11 @@ export class NMiner {
     private rejected: number = 0;
 
     private m_job?: StratumJob & JobResult;
+    private m_threads?: number[];
 
-    constructor(pool?: string, address?: string, options?: MinerOptions);
-    constructor(pool?: string, address?: string, pass?: string, options?: MinerOptions);
-    constructor(pool?: string, address?: string, passOrOptions?: string | MinerOptions, options?: MinerOptions) {
+    constructor(pool?: string, address?: string, options?: Partial<MinerOptions>);
+    constructor(pool?: string, address?: string, pass?: string, options?: Partial<MinerOptions>);
+    constructor(pool?: string, address?: string, passOrOptions?: string | Partial<MinerOptions>, options?: Partial<MinerOptions>) {
         if (pool) this.pool = pool;
         if (address) this.address = address;
 
@@ -86,16 +89,16 @@ export class NMiner {
 
         if (this.options.throttle) {
             let angle = 0;
+            let cachedThreads: number | null = null;
 
             setInterval(async () => {
                 if (!this.stratum) return;
-
-                const threads = this.options.threads || await MaxThreads();
+                if (cachedThreads === null) cachedThreads = this.options.threads ?? await MaxThreads();
 
                 angle += 0.5;
                 const curve = (Math.sin(angle) + 1) / 2, noise = Math.random() * 0.2;
 
-                const throttle_threads = Math.floor(threads * (curve * 0.6 + noise));
+                const throttle_threads = Math.floor(cachedThreads * (curve * 0.6 + noise));
                 const throttle_ms = Math.floor(1000 + Math.random() * 1000);
 
                 if (throttle_threads > 0) this.rx_job.throttle(throttle_threads, throttle_ms);
@@ -105,19 +108,21 @@ export class NMiner {
 
     private async reconnect() {
         try {
-            this.stratum = await connect(this.pool, this.options?.proxy);
+            this.stratum = await connect(this.pool, this.options?.proxy, this.options?.keepalive);
             if (this.options.logging) logger.Print(logger.BLUE_BOLD(" net     "), `use pool ${logger.CYAN(`${this.stratum.host}`)} ${logger.GRAY(this.stratum.remoteAddress)}`);
 
-            const job = await this.stratum.login(this.address, this.pass);
+            const numa = getNumaNodes();
+            const max_threads = await MaxThreads();
+            const used_threads = this.options.threads || max_threads;
+
+            const job = await this.stratum.login(this.address, this.pass, used_threads);
 
             if (job.algo)
                 this.options.algo = job.algo as RxVariant;
 
             if (await this.on_job(job)) {
-                const numa = numaNodes();
-                const max_threads = await MaxThreads();
-
-                this.rx_job.start(Array(numa).fill(Math.floor((this.options.threads || max_threads) / numa)));
+                this.m_threads = Array(numa).fill(Math.floor(used_threads / numa));
+                this.rx_job.start(this.m_threads);
 
                 this.stratum
                     .on("job", async (job) => {
@@ -157,10 +162,11 @@ export class NMiner {
                     if (await this.rx.reallocate(Buffer.from(job.seed_hash, "hex"), this.options.algo))
                         this.logger_dataset_ready(Date.now() - start);
 
-                    const numa = numaNodes();
-                    const max_threads = await MaxThreads();
+                    const numa = getNumaNodes();
+                    const used_threads = this.options.threads || await MaxThreads();
 
-                    this.rx_job.start(Array(numa).fill(Math.floor((this.options.threads || max_threads) / numa)));
+                    this.m_threads = Array(numa).fill(Math.floor(used_threads / numa));
+                    this.rx_job.start(this.m_threads);
                 } catch (err) {
                     this.logger_error(err);
                     if (this.stratum) this.stratum.close();
@@ -168,7 +174,7 @@ export class NMiner {
                     return false;
                 };
 
-            const result = this.rx_job.send_job(Buffer.from(job.blob, "hex"), Buffer.from(job.target, "hex"), this.m_job?.blob !== job.blob);
+            const result = this.rx_job.send_job(Buffer.from(job.blob, "hex"), Buffer.from(job.target, "hex"), this.options.nicehash ?? false, this.m_job?.blob !== job.blob);
             this.logger_new_job(result.diff, job.height, result.txnCount);
 
             this.m_job = { ...job, ...result };
