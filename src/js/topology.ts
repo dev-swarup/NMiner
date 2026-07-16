@@ -29,7 +29,7 @@ export async function PrintTopology(): Promise<void> {
     topology.push(["ABOUT", logger.CYAN(`NMiner/v${version}`) + " " + logger.WHITE(process.isBun ? `Bun/v${process.versions.bun}` : `Node.js/${process.version}`)]);
 
     const numa_nodes = getNumaNodes();
-    const huge_pages = hugePages(numa_nodes);
+    const huge_pages = hugePages(1280 * numa_nodes);
 
     topology.push(["HUGE PAGES", (huge_pages === 0 ? logger.GREEN("permission granted") : huge_pages === 1 ? logger.YELLOW("restart required") : logger.RED("not supported")) + "\n"]);
 
