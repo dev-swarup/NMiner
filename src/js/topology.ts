@@ -40,7 +40,7 @@ export async function PrintTopology(): Promise<void> {
 
     topology.push(["MEMORY", [
         `${logger.CYAN((mem.used / 1024 / 1024 / 1024).toFixed(1) + "/" + (mem.total / 1024 / 1024 / 1024).toFixed(1))} ${logger.WHITE("GB")} ${logger.GRAY(`(${Math.round((mem.used / mem.total) * 100)}%)`)}`,
-        ...memLayout.map(memLayout => `${memLayout.formFactor}: ${logger.CYAN(String(Math.round(memLayout.size / 1024 / 1024 / 1024)) + "GB")} ${memLayout.type} @ ${memLayout.clockSpeed} MHz ${memLayout.partNum.length > 0 ? logger.GRAY(memLayout.partNum) : ""}`)
+        ...memLayout.filter(({ bank }) => bank.length > 0).map(memLayout => `${memLayout.formFactor}: ${logger.CYAN(String(Math.round(memLayout.size / 1024 / 1024 / 1024)) + "GB")} ${memLayout.type} @ ${memLayout.clockSpeed} MHz ${memLayout.partNum.length > 0 ? logger.GRAY(memLayout.partNum) : ""}`)
     ]]);
 
     topology.push(["MOTHERBOARD", `${system.manufacturer} ${motherboard.model}`]);
