@@ -541,6 +541,9 @@
 
 #ifdef __linux__
 #define HWLOC_LINUX_SYS 1
+#define HAVE_SYS_UTSNAME_H 1
+#define HWLOC_LINUX_ARCH_X86 1
+#define RUNSTATEDIR "/var/run"
 #endif
 
 /* Define to 1 on *NETBSD */
