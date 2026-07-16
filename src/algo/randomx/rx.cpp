@@ -29,6 +29,30 @@ static bool AESSupport()
     return (cpuInfo[2] & (1u << 25)) != 0;
 };
 
+static bool VAES512Support()
+{
+#ifdef WITH_VAES
+    unsigned int cpuInfo[4] = {};
+#   ifdef _WIN32
+    __cpuidex(reinterpret_cast<int *>(cpuInfo), 7, 0);
+#   else
+    __cpuid_count(7, 0, cpuInfo[0], cpuInfo[1], cpuInfo[2], cpuInfo[3]);
+#   endif
+
+    const bool avx512f = (cpuInfo[1] & (1u << 16)) != 0;  // EBX[16]
+    const bool vaes    = (cpuInfo[2] & (1u <<  9)) != 0;  // ECX[9]
+    return avx512f && vaes;
+#else
+    return false;
+#endif
+};
+
+extern bool aes_available;
+extern bool vaes512_available;
+
+bool aes_available = AESSupport();
+bool vaes512_available = VAES512Support();
+
 static uint8_t* AllocateNuma(size_t size, uint32_t numa_node) 
 {
 #ifdef _WIN32
@@ -61,7 +85,7 @@ randomx_flags build_flags(randomx_mode mode)
 {
     uint32_t flags = RANDOMX_FLAG_JIT;
 
-    if (AESSupport())      
+    if (aes_available)      
         flags |= RANDOMX_FLAG_HARD_AES;
 
     if (mode == RANDOMX_FAST)    
@@ -77,7 +101,7 @@ randomx_flags build_cache_flags()
 {
     uint32_t flags = RANDOMX_FLAG_JIT | RANDOMX_FLAG_ARGON2;
 
-    if (AESSupport())
+    if (aes_available)
         flags |= RANDOMX_FLAG_HARD_AES;
 
     if (LargePagesSupported())

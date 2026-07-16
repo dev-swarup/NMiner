@@ -36,6 +36,13 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "intrin_portable.h"
 #include "allocator.hpp"
 
+#ifdef WITH_VAES
+extern void hashAndFillAes1Rx4_VAES512(void *scratchpad, size_t scratchpadSize, void *hash, void *fill_state);
+extern void hashAes1Rx4_VAES512(const void *scratchpad, size_t scratchpadSize, void *hash);
+#endif
+
+extern bool vaes512_available;
+
 randomx_vm::~randomx_vm() {
 
 }
@@ -115,13 +122,31 @@ namespace randomx {
 
 	template<class Allocator, bool softAes>
 	void VmBase<Allocator, softAes>::getFinalResult(void* out, size_t outSize) {
-		hashAes1Rx4<softAes>(scratchpad, ScratchpadSize, &reg.a);
+#ifdef WITH_VAES
+		if (!softAes && vaes512_available) 
+		{
+			hashAes1Rx4_VAES512(scratchpad, ScratchpadSize, &reg.a);
+		} 
+		else
+#endif
+		{
+			hashAes1Rx4<softAes>(scratchpad, ScratchpadSize, &reg.a);
+		}
 		blake2b(out, outSize, &reg, sizeof(RegisterFile), nullptr, 0);
 	}
 
 	template<class Allocator, bool softAes>
 	void VmBase<Allocator, softAes>::hashAndFill(void* out, size_t outSize, uint64_t *fill_state) {
-		hashAndFillAes1Rx4<softAes>((void*) getScratchpad(), ScratchpadSize, &reg.a, fill_state);
+#ifdef WITH_VAES
+		if (!softAes && vaes512_available) 
+		{
+			hashAndFillAes1Rx4_VAES512((void*) getScratchpad(), ScratchpadSize, &reg.a, fill_state);
+		} 
+		else
+#endif
+		{
+			hashAndFillAes1Rx4<softAes>((void*) getScratchpad(), ScratchpadSize, &reg.a, fill_state);
+		}
 		blake2b(out, outSize, &reg, sizeof(RegisterFile), nullptr, 0);
 	}
 

@@ -54,18 +54,6 @@ if (NOT MSVC)
     endif()
 endif()
 
-if (WITH_SSE4_1)
-    add_definitions(-DNMINER_FEATURE_SSE4_1)
-endif()
-
-if (WITH_AVX2)
-    add_definitions(-DNMINER_FEATURE_AVX2)
-endif()
-
-if (WITH_VAES)
-    add_definitions(-DNMINER_VAES)
-endif()
-
 list(APPEND SOURCES
     ${RANDOMX_INCLUDE}/rx.cpp
     ${RANDOMX_INCLUDE}/rx_job.cpp

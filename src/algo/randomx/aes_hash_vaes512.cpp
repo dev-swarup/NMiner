@@ -141,6 +141,57 @@ void hashAndFillAes1Rx4_VAES512(void *scratchpad, size_t scratchpadSize, void *h
 	//output hash
 	_mm512_store_si512(hash, _mm512_mask_blend_epi64(mask, enc_data, dec_data));
 
+	_mm256_zeroupper();
+}
+
+void hashAes1Rx4_VAES512(const void *scratchpad, size_t scratchpadSize, void *hash)
+{
+	const uint8_t* scratchpadPtr = (const uint8_t*)scratchpad;
+	const uint8_t* scratchpadEnd = scratchpadPtr + scratchpadSize;
+
+	// Both lanes start from the canonical hash state
+	__m512i enc_data = _mm512_load_si512(AES_HASH_1R_STATE);
+	__m512i dec_data = _mm512_load_si512(AES_HASH_1R_STATE);
+
+	constexpr int PREFETCH_DISTANCE = 7168;
+
+	const uint8_t* prefetchPtr = scratchpadPtr + PREFETCH_DISTANCE;
+	scratchpadEnd -= PREFETCH_DISTANCE;
+
+	for (const uint8_t* p = scratchpadPtr; p < prefetchPtr; p += 256) {
+		_mm_prefetch((const char*)(p +   0), _MM_HINT_T0);
+		_mm_prefetch((const char*)(p +  64), _MM_HINT_T0);
+		_mm_prefetch((const char*)(p + 128), _MM_HINT_T0);
+		_mm_prefetch((const char*)(p + 192), _MM_HINT_T0);
+	}
+
+	for (int i = 0; i < 2; ++i) {
+		while (scratchpadPtr < scratchpadEnd) {
+			const __m512i scratchpad_data = _mm512_load_si512(scratchpadPtr);
+
+			enc_data = _mm512_aesenc_epi128(enc_data, scratchpad_data);
+			dec_data = _mm512_aesdec_epi128(dec_data, scratchpad_data);
+
+			_mm_prefetch((const char*)prefetchPtr, _MM_HINT_T0);
+
+			scratchpadPtr += 64;
+			prefetchPtr   += 64;
+		}
+		prefetchPtr = (const uint8_t*)scratchpad;
+		scratchpadEnd += PREFETCH_DISTANCE;
+	}
+
+	const __m512i xkey0 = _mm512_load_si512(AES_HASH_1R_XKEY0);
+	const __m512i xkey1 = _mm512_load_si512(AES_HASH_1R_XKEY1);
+
+	enc_data = _mm512_aesenc_epi128(enc_data, xkey0);
+	dec_data = _mm512_aesdec_epi128(dec_data, xkey0);
+	enc_data = _mm512_aesenc_epi128(enc_data, xkey1);
+	dec_data = _mm512_aesdec_epi128(dec_data, xkey1);
+
+	constexpr uint8_t mask = 0b11001100;
+	_mm512_store_si512(hash, _mm512_mask_blend_epi64(mask, enc_data, dec_data));
+
 	// Just in case
 	_mm256_zeroupper();
 }
