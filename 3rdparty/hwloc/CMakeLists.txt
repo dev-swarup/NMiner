@@ -26,12 +26,15 @@ set(SOURCES
     src/topology.c
     src/topology-noos.c
     src/topology-synthetic.c
-    src/topology-x86.c
     src/topology-xml.c
     src/topology-xml-nolibxml.c
     src/traversal.c
     src/memattrs.c
     src/cpukinds.c)
+
+if (ARCH_ID STREQUAL "x86_64" OR ARCH_ID STREQUAL "x86-64" OR ARCH_ID STREQUAL "amd64")
+    list(APPEND SOURCES src/topology-x86.c)
+endif()
 
 if (WIN32)
     list(APPEND SOURCES src/topology-windows.c)

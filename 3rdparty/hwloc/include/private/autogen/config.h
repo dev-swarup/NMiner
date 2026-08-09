@@ -579,10 +579,14 @@
 #endif
 
 /* Define to 1 on x86_32 */
-/* #undef HWLOC_X86_32_ARCH */
+#if defined(__i386__) || defined(_M_IX86)
+#define HWLOC_X86_32_ARCH 1
+#endif
 
 /* Define to 1 on x86_64 */
+#if defined(__x86_64__) || defined(_M_X64)
 #define HWLOC_X86_64_ARCH 1
+#endif
 
 /* Define to the sub-directory in which libtool stores uninstalled libraries.
    */

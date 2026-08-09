@@ -198,6 +198,10 @@ if(ARM_ID STREQUAL "aarch64" OR ARM_ID STREQUAL "arm64" OR ARM_ID STREQUAL "armv
     set_property(SOURCE ${RANDOMX_INCLUDE}/jit_compiler_a64_static.S PROPERTY LANGUAGE C)
     set_property(SOURCE ${RANDOMX_INCLUDE}/jit_compiler_a64_static.S PROPERTY XCODE_EXPLICIT_FILE_TYPE sourcecode.asm)
 
+    if (MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set_source_files_properties(${RANDOMX_INCLUDE}/jit_compiler_a64_static.S PROPERTIES COMPILE_OPTIONS "/clang:-x;/clang:assembler-with-cpp")
+    endif()
+
     if(ARCH STREQUAL "native")
         add_flag("-march=native")
     else()
