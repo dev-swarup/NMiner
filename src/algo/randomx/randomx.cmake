@@ -30,6 +30,12 @@ if (NOT DEFINED WITH_VAES)
     set(WITH_VAES ON)
 endif()
 
+if (NOT (ARCH_ID STREQUAL "x86_64" OR ARCH_ID STREQUAL "x86-64" OR ARCH_ID STREQUAL "amd64"))
+    set(WITH_AVX2 OFF)
+    set(WITH_VAES OFF)
+    set(WITH_SSE4_1 OFF)
+endif()
+
 if (MSVC)
     set(VAES_COMPILER_OK ON)
 else()
