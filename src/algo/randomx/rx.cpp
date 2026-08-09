@@ -1,22 +1,35 @@
 #include "rx.h"
 #include "rx_worker.h"
 
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+#define NMINER_X86 1
+#endif
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-#include <intrin.h>
+
 #include <windows.h>
 #include <memoryapi.h>
+#ifdef NMINER_X86
+#include <intrin.h>
+#endif
 #else
-#include <cpuid.h>
 #include <sched.h>
 #include <pthread.h>
 #include <sys/mman.h>
+#ifdef NMINER_X86
+#include <cpuid.h>
+#elif defined(__aarch64__)
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#endif
 #endif
 
 static bool has_aes()
 {
+#if defined(NMINER_X86)
     unsigned int regs[4] = {};
 #ifdef _WIN32
     __cpuid(reinterpret_cast<int *>(regs), 1);
@@ -24,6 +37,13 @@ static bool has_aes()
     __get_cpuid(1, &regs[0], &regs[1], &regs[2], &regs[3]);
 #endif
     return (regs[2] & (1u << 25)) != 0;
+#elif defined(_WIN32) && defined(_M_ARM64)
+    return IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE) != 0;
+#elif defined(__aarch64__)
+    return (getauxval(AT_HWCAP) & HWCAP_AES) != 0;
+#else
+    return false;
+#endif
 }
 
 static bool has_vaes512()

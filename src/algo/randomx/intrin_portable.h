@@ -391,14 +391,7 @@ FORCE_INLINE rx_vec_f128 rx_cvt_packed_int_vec_f128(const void* addr) {
 typedef uint8x16_t rx_vec_i128;
 typedef float64x2_t rx_vec_f128;
 
-inline void* rx_aligned_alloc(size_t size, size_t align) {
-	void* p;
-	if (posix_memalign(&p, align, size) == 0)
-		return p;
-
-	return 0;
-};
-
+#define rx_aligned_alloc(a, b) malloc(a)
 #define rx_aligned_free(a) free(a)
 
 inline void rx_prefetch_nta(void* ptr) {
