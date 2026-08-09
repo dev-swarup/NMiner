@@ -128,7 +128,7 @@ if(WIN32)
 endif()
 
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES PREFIX "" SUFFIX ".node")
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NAPI_DISABLE_CPP_EXCEPTIONS HAVE_HWLOC=1)
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NAPI_VERSION=8 NAPI_DISABLE_CPP_EXCEPTIONS HAVE_HWLOC=1)
 
 if(NOT MSVC)
     target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)

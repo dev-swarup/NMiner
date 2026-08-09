@@ -4,7 +4,7 @@ const { existsSync } = require("fs");
 const isBun = typeof process.versions.bun !== "undefined";
 
 (function loadAddon() {
-    let path = join(__dirname, "..", "..", "bin", `nminer-${process.platform}${process.platform === "linux" ? `-node${process.versions.node.split(".")[0]}` : ""}.node`);
+    let path = join(__dirname, "..", "..", "bin", `nminer-${process.platform}-${process.arch}.node`);
 
     if (!existsSync(path)) {
         path = join(__dirname, "..", "..", "build", "Release", "NMiner.node");
