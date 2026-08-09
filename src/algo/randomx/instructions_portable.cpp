@@ -45,7 +45,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 	#define HAVE_SMULH
 #endif
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(__clang__)
 	#define HAS_VALUE(X) X ## 0
 	#define EVAL_DEFINE(X) HAS_VALUE(X)
 	#include <intrin.h>
