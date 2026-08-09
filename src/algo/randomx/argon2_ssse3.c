@@ -38,7 +38,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "argon2.h"
 
-#if defined(_MSC_VER) //MSVC doesn't define SSSE3
+#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64)) //MSVC doesn't define SSSE3 on x86/x64
 #define __SSSE3__
 #endif
 
