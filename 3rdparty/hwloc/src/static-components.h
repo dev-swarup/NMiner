@@ -8,7 +8,10 @@ HWLOC_DECLSPEC extern const struct hwloc_component hwloc_windows_component;
 HWLOC_DECLSPEC extern const struct hwloc_component hwloc_linux_component;
 #endif
 
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
 HWLOC_DECLSPEC extern const struct hwloc_component hwloc_x86_component;
+#endif
+
 static const struct hwloc_component * hwloc_static_components[] = {
   &hwloc_noos_component,
   &hwloc_xml_component,
@@ -19,6 +22,8 @@ static const struct hwloc_component * hwloc_static_components[] = {
 #elif defined(HWLOC_LINUX_SYS)
   &hwloc_linux_component,
 #endif
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
   &hwloc_x86_component,
+#endif
   NULL
 };
