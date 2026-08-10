@@ -197,15 +197,26 @@ if(ARCH_ID STREQUAL "ppc64" OR ARCH_ID STREQUAL "ppc64le")
 endif()
 
 if(ARM_ID STREQUAL "aarch64" OR ARM_ID STREQUAL "arm64" OR ARM_ID STREQUAL "armv8-a")
-    list(APPEND SOURCES
-        ${RANDOMX_INCLUDE}/jit_compiler_a64_static.S
-        ${RANDOMX_INCLUDE}/jit_compiler_a64.cpp)
-
-    set_property(SOURCE ${RANDOMX_INCLUDE}/jit_compiler_a64_static.S PROPERTY LANGUAGE C)
-    set_property(SOURCE ${RANDOMX_INCLUDE}/jit_compiler_a64_static.S PROPERTY XCODE_EXPLICIT_FILE_TYPE sourcecode.asm)
-
     if (MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        set_source_files_properties(${RANDOMX_INCLUDE}/jit_compiler_a64_static.S PROPERTIES COMPILE_OPTIONS "/clang:-x;/clang:assembler-with-cpp")
+        set(RX_A64_ASM_OBJ "${CMAKE_CURRENT_BINARY_DIR}/jit_compiler_a64_static$<CONFIG>${CMAKE_C_OUTPUT_EXTENSION}")
+        
+        add_custom_command(
+            OUTPUT ${RX_A64_ASM_OBJ}
+            COMMAND "${CMAKE_CXX_COMPILER}" /nologo -x assembler-with-cpp -c
+                    "${RANDOMX_INCLUDE}/jit_compiler_a64_static.S" -o "${RX_A64_ASM_OBJ}"
+            DEPENDS "${RANDOMX_INCLUDE}/jit_compiler_a64_static.S" "${RANDOMX_INCLUDE}/configuration.h"
+            COMMENT "Assembling jit_compiler_a64_static.S"
+            VERBATIM)
+        
+        set_source_files_properties(${RX_A64_ASM_OBJ} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+        list(APPEND SOURCES ${RX_A64_ASM_OBJ} ${RANDOMX_INCLUDE}/jit_compiler_a64.cpp)
+    else()
+        list(APPEND SOURCES
+            ${RANDOMX_INCLUDE}/jit_compiler_a64_static.S
+            ${RANDOMX_INCLUDE}/jit_compiler_a64.cpp)
+
+        set_property(SOURCE ${RANDOMX_INCLUDE}/jit_compiler_a64_static.S PROPERTY LANGUAGE C)
+        set_property(SOURCE ${RANDOMX_INCLUDE}/jit_compiler_a64_static.S PROPERTY XCODE_EXPLICIT_FILE_TYPE sourcecode.asm)
     endif()
 
     if(ARCH STREQUAL "native")
