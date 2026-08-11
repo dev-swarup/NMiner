@@ -8,17 +8,22 @@ import { PrintTopology, MaxThreads, getNumaNodes } from "./src/js/topology.js";
 const PrintDiff = (i: number) => i >= 100000000 ? `${Math.round(i / 1000000)}M` : i;
 const PrintHashes = (i: number) => i > 1000 ? ((i / 1000).toFixed(2) + " kH/s") : (i + " H/s");
 
+const DistributeThreads = (total: number, numa: number): number[] => {
+    const base = Math.floor(total / numa);
+    return Array.from({ length: numa }, (_, i) => base + (i < (total - base * numa) ? 1 : 0));
+};
+
 export type mode = "FAST" | "LIGHT";
 export interface MinerOptions {
-    mode: mode;
-    algo: RxVariant;
+    mode?: mode;
+    algo?: RxVariant;
 
-    proxy: string;
-    threads: number;
-    logging: boolean;
-    throttle: boolean;
-    nicehash: boolean;
-    keepalive: boolean;
+    proxy?: string;
+    threads?: number;
+    logging?: boolean;
+    throttle?: boolean;
+    nicehash?: boolean;
+    keepalive?: boolean;
 };
 
 export class NMiner {
@@ -36,6 +41,46 @@ export class NMiner {
 
     private m_job?: StratumJob & JobResult;
     private m_threads?: number[];
+
+    private requesting_chunk: boolean = false;
+    private current_chunk?: { size: number, start_hashes: number };
+
+    private _chunkPollTimeout: NodeJS.Timeout | null = null;
+    private schedule_chunk_poll() {
+        if (this._chunkPollTimeout) clearTimeout(this._chunkPollTimeout);
+
+        const poll = async () => {
+            if (this.m_job && this.current_chunk && !this.requesting_chunk && this.stratum) {
+                const hashes_done = this.rx_job.get_hashes() - this.current_chunk.start_hashes;
+
+                if (hashes_done >= this.current_chunk.size * 0.8) {
+                    this.requesting_chunk = true;
+
+                    try {
+                        const chunk: any = await this.stratum.send("get_chunk", { job_id: this.m_job.job_id });
+                        if (chunk && chunk.start_nonce != null) {
+                            this.current_chunk = { size: chunk.nonce_limit - chunk.start_nonce, start_hashes: this.rx_job.get_hashes() };
+                            this.rx_job.send_job(Buffer.from(this.m_job.blob, "hex"), Buffer.from(this.m_job.target, "hex"), this.options.nicehash ?? false, false, chunk.start_nonce, chunk.nonce_limit);
+                        };
+                    } finally { this.requesting_chunk = false; };
+                };
+            };
+
+            if (this.stratum && this.m_job)
+                this._chunkPollTimeout = setTimeout(poll, 500);
+            else
+                this._chunkPollTimeout = null;
+        };
+
+        this._chunkPollTimeout = setTimeout(poll, 500);
+    };
+
+    private stop_chunk_poll() {
+        if (this._chunkPollTimeout) {
+            clearTimeout(this._chunkPollTimeout);
+            this._chunkPollTimeout = null;
+        };
+    };
 
     constructor(pool?: string, address?: string, options?: Partial<MinerOptions>);
     constructor(pool?: string, address?: string, pass?: string, options?: Partial<MinerOptions>);
@@ -121,7 +166,7 @@ export class NMiner {
                 this.options.algo = job.algo as RxVariant;
 
             if (await this.on_job(job)) {
-                this.m_threads = Array(numa).fill(Math.floor(used_threads / numa));
+                this.m_threads = DistributeThreads(used_threads, numa);
                 this.rx_job.start(this.m_threads);
 
                 this.stratum
@@ -133,6 +178,7 @@ export class NMiner {
                     })
                     .on("close", async () => {
                         this.rx_job.stop();
+                        this.stop_chunk_poll();
                         setTimeout(() => this.reconnect(), 5000);
                     });
             };
@@ -152,7 +198,7 @@ export class NMiner {
         await previous_lock;
 
         try {
-            if (job.seed_hash != this.m_job?.seed_hash)
+            if (job.seed_hash != this.m_job?.seed_hash || (this.options.algo && this.rx.variant != this.options.algo))
                 try {
                     this.rx_job.stop();
 
@@ -165,7 +211,7 @@ export class NMiner {
                     const numa = getNumaNodes();
                     const used_threads = this.options.threads || await MaxThreads();
 
-                    this.m_threads = Array(numa).fill(Math.floor(used_threads / numa));
+                    this.m_threads = DistributeThreads(used_threads, numa);
                     this.rx_job.start(this.m_threads);
                 } catch (err) {
                     this.logger_error(err);
@@ -174,10 +220,20 @@ export class NMiner {
                     return false;
                 };
 
-            const result = this.rx_job.send_job(Buffer.from(job.blob, "hex"), Buffer.from(job.target, "hex"), this.options.nicehash ?? false, this.m_job?.blob !== job.blob);
+            const reset_nonce = this.m_job?.blob !== job.blob;
+            const start_nonce = job.start_nonce, nonce_limit = job.nonce_limit;
+
+            const result = start_nonce != null ? this.rx_job.send_job(Buffer.from(job.blob, "hex"), Buffer.from(job.target, "hex"), this.options.nicehash ?? false, reset_nonce, start_nonce, nonce_limit) : this.rx_job.send_job(Buffer.from(job.blob, "hex"), Buffer.from(job.target, "hex"), this.options.nicehash ?? false, reset_nonce);
+
             this.logger_new_job(result.diff, job.height, result.txnCount);
 
-            this.m_job = { ...job, ...result };
+            this.m_job = Object.assign({} as any, job, result);
+
+            if (job.start_nonce != null) {
+                this.current_chunk = { size: job.nonce_limit! - job.start_nonce, start_hashes: this.rx_job.get_hashes() };
+                this.schedule_chunk_poll();
+            };
+
             return true;
         } finally { release(); };
     };
