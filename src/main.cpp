@@ -93,7 +93,7 @@ Napi::Value HugePages(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
 
-    uint32_t numPages = 128;
+    uint32_t numPages = 1280; // 2560 MB: enough for one 2080 MB dataset plus scratchpads
 
     if (info.Length() > 0 && info[0].IsNumber())
         numPages = info[0].As<Napi::Number>().Uint32Value();
@@ -211,7 +211,7 @@ namespace
                 return static_cast<uint32_t>(n > 0 ? n : 1);
             };
 
-            nodes.push_back({ node ? node->os_index : 0u, sum_caches(set, HWLOC_OBJ_L2CACHE), sum_caches(set, HWLOC_OBJ_L3CACHE), (HWLOC_OBJ_CORE), (HWLOC_OBJ_PU) });
+            nodes.push_back({ node ? node->os_index : 0u, sum_caches(set, HWLOC_OBJ_L2CACHE), sum_caches(set, HWLOC_OBJ_L3CACHE), count_by(HWLOC_OBJ_CORE), count_by(HWLOC_OBJ_PU) });
         };
 
         hwloc_topology_destroy(topology);
@@ -261,7 +261,10 @@ Napi::Value GetCacheInfo(const Napi::CallbackInfo &info)
 
     out.Set("l2PerThread", Napi::Number::New(env, RANDOMX_SCRATCHPAD_L2));
     out.Set("l3PerThread", Napi::Number::New(env, RANDOMX_SCRATCHPAD_L3));
+
+    out.Set("aes", Napi::String::New(env, AesImplName()));
     out.Set("blake2", Napi::String::New(env, Blake2ImplName()));
+
     out.Set("nodes", list);
 
     return out;

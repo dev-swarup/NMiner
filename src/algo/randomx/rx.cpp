@@ -1,5 +1,6 @@
 #include "rx.h"
 #include "rx_worker.h"
+#include "argon2.h"
 #include "blake2/blake2.h"
 
 #if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
@@ -62,6 +63,21 @@ static bool has_sse41()
 #endif
 };
 
+static bool has_ssse3()
+{
+#if defined(NMINER_X86)
+    unsigned int regs[4] = {};
+#ifdef _WIN32
+    __cpuid(reinterpret_cast<int *>(regs), 1);
+#else
+    __get_cpuid(1, &regs[0], &regs[1], &regs[2], &regs[3]);
+#endif
+    return (regs[2] & (1u << 9)) != 0;
+#else
+    return false;
+#endif
+};
+
 static bool has_avx2()
 {
 #if defined(NMINER_X86)
@@ -99,16 +115,34 @@ static bool has_avx2()
 
 static bool has_vaes512()
 {
-#ifdef WITH_VAES
+#if defined(WITH_VAES) && defined(NMINER_X86)
     unsigned int regs[4] = {};
+#ifdef _WIN32
+    __cpuid(reinterpret_cast<int *>(regs), 1);
+#else
+    __get_cpuid(1, &regs[0], &regs[1], &regs[2], &regs[3]);
+#endif
+    if (!(regs[2] & (1u << 27)))
+        return false;
+
+    unsigned int lo = 0;
+#ifdef _WIN32
+    lo = static_cast<unsigned int>(_xgetbv(0));
+#else
+    unsigned int hi = 0;
+    __asm__ __volatile__("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+#endif
+
+    // ZMM state (opmask + upper halves) must be OS-enabled or AVX-512 faults despite CPUID.
+    if ((lo & 0xE6u) != 0xE6u)
+        return false;
+
 #ifdef _WIN32
     __cpuidex(reinterpret_cast<int *>(regs), 7, 0);
 #else
     __cpuid_count(7, 0, regs[0], regs[1], regs[2], regs[3]);
 #endif
-    const bool vaes = (regs[2] & (1u << 9)) != 0;
-    const bool avx512f = (regs[1] & (1u << 16)) != 0;
-    return avx512f && vaes;
+    return (regs[1] & (1u << 16)) != 0 && (regs[2] & (1u << 9)) != 0;
 #else
     return false;
 #endif
@@ -144,6 +178,16 @@ const char *Blake2ImplName()
     return "reference";
 };
 
+const char *AesImplName()
+{
+    if (vaes512_available)
+        return "vaes512";
+    if (aes_available)
+        return "aes-ni";
+
+    return "soft";
+};
+
 static uint8_t *alloc_numa(size_t size, uint32_t numa_node)
 {
 #ifdef _WIN32
@@ -158,9 +202,15 @@ static uint8_t *alloc_numa(size_t size, uint32_t numa_node)
 
     void *ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
 
-    if (ptr == MAP_FAILED) ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ptr == MAP_FAILED)
+    {
+        ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (ptr == MAP_FAILED) return nullptr;
 
-    if (ptr == MAP_FAILED) return nullptr;
+#ifdef MADV_HUGEPAGE
+        madvise(ptr, size, MADV_HUGEPAGE);
+#endif
+    };
 
     return static_cast<uint8_t *>(ptr);
 #endif
@@ -205,7 +255,14 @@ randomx_flags build_flags(RxMode mode, RxAlgoVersion version)
 
 randomx_flags build_cache_flags()
 {
-    return static_cast<randomx_flags>(common_flags() | RANDOMX_FLAG_ARGON2);
+    uint32_t flags = common_flags();
+
+    if (randomx_argon2_impl_avx2() && has_avx2())
+        flags |= RANDOMX_FLAG_ARGON2_AVX2;
+    else if (randomx_argon2_impl_ssse3() && has_ssse3())
+        flags |= RANDOMX_FLAG_ARGON2_SSSE3;
+
+    return static_cast<randomx_flags>(flags);
 };
 
 RxVm::RxVm(uint8_t *scratchpad, randomx_vm *vm, std::atomic<int> &active) : scratchpad(scratchpad), vm(vm), active(active)
@@ -303,6 +360,12 @@ Napi::Value Rx::hash(const Napi::CallbackInfo &info)
     };
 
     const auto input = ToVector(info[0].As<Napi::Buffer<uint8_t>>());
+
+    if (updating.load(std::memory_order_acquire))
+    {
+        Napi::Error::New(env, "Cache is being reallocated: await allocate() first").ThrowAsJavaScriptException();
+        return env.Null();
+    };
 
     std::shared_ptr<RxVm> vm = create_vm(0);
     if (!vm)

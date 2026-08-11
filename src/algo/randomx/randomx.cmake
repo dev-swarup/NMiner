@@ -124,6 +124,7 @@ if (WITH_AVX2)
 
     if (MSVC)
         set_source_files_properties(${RANDOMX_INCLUDE}/blake2/avx2/blake2b_avx2.c PROPERTIES COMPILE_FLAGS "/arch:AVX2")
+        set_source_files_properties(${RANDOMX_INCLUDE}/argon2_avx2.c              PROPERTIES COMPILE_FLAGS "/arch:AVX2")
     elseif (CMAKE_C_COMPILER_ID MATCHES GNU OR CMAKE_C_COMPILER_ID MATCHES Clang)
         set_source_files_properties(${RANDOMX_INCLUDE}/blake2/avx2/blake2b_avx2.c PROPERTIES COMPILE_FLAGS "-Ofast -mavx2")
         set_source_files_properties(${RANDOMX_INCLUDE}/argon2_avx2.c              PROPERTIES COMPILE_FLAGS "-Ofast -mavx2")
@@ -133,6 +134,7 @@ endif()
 
 if (WITH_VAES)
     if (EXISTS "${RANDOMX_INCLUDE}/aes_hash_vaes512.cpp")
+        add_definitions(-DWITH_VAES)
         list(APPEND SOURCES ${RANDOMX_INCLUDE}/aes_hash_vaes512.cpp)
 
         if (MSVC)

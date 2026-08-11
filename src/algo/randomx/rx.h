@@ -63,6 +63,7 @@ enum class RxMode : uint8_t
 };
 
 bool LargePagesSupported();
+const char *AesImplName();
 const char *Blake2ImplName();
 
 randomx_flags build_flags(RxMode mode, RxAlgoVersion version);

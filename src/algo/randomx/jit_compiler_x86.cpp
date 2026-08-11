@@ -320,12 +320,11 @@ namespace randomx {
 	void JitCompilerX86::generateProgram(Program& prog, ProgramConfiguration& pcfg) {
 		generateProgramPrologue(prog, pcfg);
 		if (vmFlags & RANDOMX_FLAG_V2) {
-			memcpy(code + codePos, codeReadDatasetV2, readDatasetV2Size);
+			emit(codeReadDatasetV2, readDatasetV2Size);
 		}
 		else {
-			memcpy(code + codePos, codeReadDataset, readDatasetSize);
+			emit(codeReadDataset, readDatasetSize);
 		}
-		codePos += readDatasetSize;
 		generateProgramEpilogue(prog, pcfg);
 	}
 
