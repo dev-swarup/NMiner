@@ -44,7 +44,7 @@
 	.global DECL(randomx_program_aarch64_v2_FE_mix)
 	.global DECL(randomx_program_aarch64_v1_FE_mix)
 	.global DECL(randomx_program_aarch64_v2_FE_mix_soft_aes)
-	#ifndef __APPLE__
+	#if !defined(__APPLE__) && !defined(_WIN32)
 	.hidden DECL(randomx_program_aarch64_aes_lut_pointers)
 	#endif
 	.global DECL(randomx_program_aarch64_aes_lut_pointers)
