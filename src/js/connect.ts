@@ -38,6 +38,9 @@ export type StratumJob = {
 
     algo?: string;
     height?: number;
+
+    start_nonce?: number;
+    nonce_limit?: number;
 };
 
 export class StratumClient extends EventEmitter<{
@@ -213,7 +216,9 @@ export class StratumClient extends EventEmitter<{
             target: result.job.target,
             seed_hash: result.job.seed_hash,
             ...(result.job.algo !== undefined ? { algo: result.job.algo } : {}),
-            ...(result.job.height !== undefined ? { height: result.job.height } : {})
+            ...(result.job.height !== undefined ? { height: result.job.height } : {}),
+            ...(result.job.start_nonce !== undefined ? { start_nonce: result.job.start_nonce } : {}),
+            ...(result.job.nonce_limit !== undefined ? { nonce_limit: result.job.nonce_limit } : {})
         };
 
         this.emit("connect", this.remoteAddress);
