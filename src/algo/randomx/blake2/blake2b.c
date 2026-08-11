@@ -39,7 +39,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "blake2.h"
 #include "blake2-impl.h"
 
-static const uint64_t blake2b_IV[8] = {
+// Not static: the SSE4.1 compress function shares these round constants.
+const uint64_t blake2b_IV[8] = {
 	UINT64_C(0x6a09e667f3bcc908), UINT64_C(0xbb67ae8584caa73b),
 	UINT64_C(0x3c6ef372fe94f82b), UINT64_C(0xa54ff53a5f1d36f1),
 	UINT64_C(0x510e527fade682d1), UINT64_C(0x9b05688c2b3e6c1f),
@@ -179,7 +180,14 @@ int blake2b_init_key(blake2b_state *S, size_t outlen, const void *key, size_t ke
 	return 0;
 }
 
-static void blake2b_compress(blake2b_state *S, const uint8_t *block) {
+void randomx_blake2b_compress_integer(blake2b_state *S, const uint8_t *block);
+
+// Selected once at startup; a constant initializer keeps the reference path valid
+// even if something hashes before the CPU probe runs.
+void (*randomx_blake2b_compress)(blake2b_state *S, const uint8_t *block) = randomx_blake2b_compress_integer;
+int (*randomx_blake2b_simd)(void *out, size_t outlen, const void *in, size_t inlen) = NULL;
+
+void randomx_blake2b_compress_integer(blake2b_state *S, const uint8_t *block) {
 	uint64_t m[16];
 	uint64_t v[16];
 	unsigned int i, r;
@@ -260,14 +268,14 @@ int blake2b_update(blake2b_state *S, const void *in, size_t inlen) {
 		size_t fill = BLAKE2B_BLOCKBYTES - left;
 		memcpy(&S->buf[left], pin, fill);
 		blake2b_increment_counter(S, BLAKE2B_BLOCKBYTES);
-		blake2b_compress(S, S->buf);
+		randomx_blake2b_compress(S, S->buf);
 		S->buflen = 0;
 		inlen -= fill;
 		pin += fill;
 		/* Avoid buffer copies when possible */
 		while (inlen > BLAKE2B_BLOCKBYTES) {
 			blake2b_increment_counter(S, BLAKE2B_BLOCKBYTES);
-			blake2b_compress(S, pin);
+			randomx_blake2b_compress(S, pin);
 			inlen -= BLAKE2B_BLOCKBYTES;
 			pin += BLAKE2B_BLOCKBYTES;
 		}
@@ -294,7 +302,7 @@ int blake2b_final(blake2b_state *S, void *out, size_t outlen) {
 	blake2b_increment_counter(S, S->buflen);
 	blake2b_set_lastblock(S);
 	memset(&S->buf[S->buflen], 0, BLAKE2B_BLOCKBYTES - S->buflen); /* Padding */
-	blake2b_compress(S, S->buf);
+	randomx_blake2b_compress(S, S->buf);
 
 	for (i = 0; i < 8; ++i) { /* Output full hash to temp buffer */
 		store64(buffer + sizeof(S->h[i]) * i, S->h[i]);
@@ -311,6 +319,14 @@ int blake2b(void *out, size_t outlen, const void *in, size_t inlen,
 	const void *key, size_t keylen) {
 	blake2b_state S;
 	int ret = -1;
+
+	/* A vectorized whole-hash implementation only covers the unkeyed path, which is
+	   the only one RandomX uses. */
+	if (randomx_blake2b_simd != NULL && key == NULL && keylen == 0 &&
+		out != NULL && outlen > 0 && outlen <= BLAKE2B_OUTBYTES &&
+		(in != NULL || inlen == 0)) {
+		return randomx_blake2b_simd(out, outlen, in, inlen);
+	}
 
 	/* Verify parameters */
 	if (NULL == in && inlen > 0) {

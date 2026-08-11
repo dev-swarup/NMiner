@@ -124,6 +124,8 @@ FORCE_INLINE rx_vec_f128 rx_set1_vec_f128(uint64_t x) {
 	return _mm_castsi128_pd(_mm_set1_epi64x(x));
 }
 
+#define rx_cast_vec_i2f _mm_castsi128_pd
+#define rx_cast_vec_f2i _mm_castpd_si128
 #define rx_xor_vec_f128 _mm_xor_pd
 #define rx_and_vec_f128 _mm_and_pd
 #define rx_or_vec_f128 _mm_or_pd
@@ -272,6 +274,14 @@ FORCE_INLINE rx_vec_f128 rx_set_vec_f128(uint64_t x1, uint64_t x0) {
 
 FORCE_INLINE rx_vec_f128 rx_set1_vec_f128(uint64_t x) {
 	return (rx_vec_f128)vec_splat2sd(x);
+}
+
+FORCE_INLINE rx_vec_f128 rx_cast_vec_i2f(rx_vec_i128 a) {
+	return (rx_vec_f128)a;
+}
+
+FORCE_INLINE rx_vec_i128 rx_cast_vec_f2i(rx_vec_f128 a) {
+	return (rx_vec_i128)a;
 }
 
 FORCE_INLINE rx_vec_f128 rx_xor_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
@@ -433,6 +443,14 @@ FORCE_INLINE rx_vec_f128 rx_set1_vec_f128(uint64_t x) {
 #define rx_div_vec_f128 vdivq_f64
 #define rx_sqrt_vec_f128 vsqrtq_f64
 
+FORCE_INLINE rx_vec_i128 rx_cast_vec_f2i(rx_vec_f128 x) {
+	return vreinterpretq_u8_f64(x);
+}
+
+FORCE_INLINE rx_vec_f128 rx_cast_vec_i2f(rx_vec_i128 x) {
+	return vreinterpretq_f64_u8(x);
+}
+
 FORCE_INLINE rx_vec_f128 rx_xor_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	return vreinterpretq_f64_u8(veorq_u8(vreinterpretq_u8_f64(a), vreinterpretq_u8_f64(b)));
 }
@@ -532,7 +550,23 @@ typedef union {
 	rx_vec_i128 i;
 } rx_vec_f128;
 
+#ifdef HAVE_POSIX_MEMALIGN
+#include <stdlib.h>
+
+inline void* rx_aligned_alloc(size_t size, size_t align) {
+	void* p;
+	if (posix_memalign(&p, align, size) == 0)
+		return p;
+
+	return 0;
+};
+
+#else // HAVE_POSIX_MEMALIGN
+
 #define rx_aligned_alloc(a, b) malloc(a)
+
+#endif // HAVE_POSIX_MEMALIGN
+
 #define rx_aligned_free(a) free(a)
 #define rx_prefetch_nta(x)
 #define rx_prefetch_t0(x)
@@ -696,6 +730,28 @@ FORCE_INLINE void rx_store_vec_i128(rx_vec_i128 *p, rx_vec_i128 b) {
 	store32(ptr + 1, b.u32[1]);
 	store32(ptr + 2, b.u32[2]);
 	store32(ptr + 3, b.u32[3]);
+#endif
+}
+
+FORCE_INLINE rx_vec_f128 rx_cast_vec_i2f(rx_vec_i128 a) {
+#if defined(NATIVE_LITTLE_ENDIAN)
+	rx_vec_f128 x;
+	x.i = a;
+	return x;
+#else
+	alignas(16) char buf[16];
+	rx_store_vec_i128((rx_vec_i128*)buf, a);
+	return rx_load_vec_f128((double*)buf);
+#endif
+}
+
+FORCE_INLINE rx_vec_i128 rx_cast_vec_f2i(rx_vec_f128 a) {
+#if defined(NATIVE_LITTLE_ENDIAN)
+	return a.i;
+#else
+	alignas(16) char buf[16];
+	rx_store_vec_f128((double*)buf, a);
+	return rx_load_vec_i128((rx_vec_i128*)buf);
 #endif
 }
 

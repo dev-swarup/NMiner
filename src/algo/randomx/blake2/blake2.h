@@ -109,6 +109,16 @@ extern "C" {
 	int blake2b_long(void *out, size_t outlen, const void *in, size_t inlen);
 	/* Argon2 Team - End Code */
 
+	/* Vectorized implementations, selected once at startup by SelectBlake2Impl().
+	   randomx_blake2b_compress always points at a valid function; randomx_blake2b_simd
+	   is NULL unless a whole-hash implementation was picked. */
+	extern void (*randomx_blake2b_compress)(blake2b_state *S, const uint8_t *block);
+	extern int (*randomx_blake2b_simd)(void *out, size_t outlen, const void *in, size_t inlen);
+
+	void randomx_blake2b_compress_integer(blake2b_state *S, const uint8_t *block);
+	void rx_blake2b_compress_sse41(blake2b_state *S, const uint8_t *block);
+	int blake2b_avx2(void *out, size_t outlen, const void *in, size_t inlen);
+
 #if defined(__cplusplus)
 }
 #endif

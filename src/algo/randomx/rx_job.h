@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstdint>
 #include <algorithm>
+#include <type_traits>
 #include <condition_variable>
 
 #include <napi.h>
@@ -19,7 +20,6 @@
 #include "rx.h"
 
 static constexpr size_t kNonceOffset = 39;
-static constexpr size_t kMaxSeedSize = 32;
 static constexpr size_t kMaxBlobSize = 408;
 
 template <typename T>
@@ -60,14 +60,28 @@ public:
     Napi::Value Stop(const Napi::CallbackInfo &info);
 
 private:
-    void SubmitJob(JobResult *result);
+    struct ThreadSlot
+    {
+        uint32_t core_id;
+        uint32_t numa_node;
+    };
 
-    void Loop(uint32_t thread_index, uint32_t core_id, uint32_t numa_node);
+    std::vector<ThreadSlot> PlanThreads(std::vector<uint32_t> counts);
+    void BindThread(uint32_t core_id);
+
+    void Loop(uint32_t core_id, uint32_t numa_node);
     void StopLoop();
 
-    inline void flush_hash(std::shared_ptr<randomx_numa> &vm, const uint8_t *blob, size_t size, uint64_t target, bool &is_first);
+    bool HasWork(size_t size) const;
+    void WaitForWork(size_t size, uint32_t version);
+    void ApplyThrottle();
+
+    void WriteNonce(uint8_t *blob, uint32_t nonce) const;
+    void SubmitShare(const uint8_t *hash, const uint8_t *blob, uint64_t target);
+    void FlushHash(const std::shared_ptr<RxVm> &vm, const uint8_t *blob, size_t size, uint64_t target, bool &is_first);
 
     Rx *rx = nullptr;
+    Napi::ObjectReference rx_ref;
     Napi::ThreadSafeFunction tsfn;
 
 #ifdef HAVE_HWLOC
@@ -92,7 +106,7 @@ private:
 
     alignas(16) uint8_t m_blob[kMaxBlobSize]{};
     size_t m_size = 0;
-    bool m_nicehash = false;
-
     uint64_t m_target = 0;
+
+    std::atomic<bool> m_nicehash{false};
 };

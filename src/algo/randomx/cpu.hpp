@@ -33,17 +33,24 @@ namespace randomx {
 	class Cpu {
 	public:
 		Cpu();
-		bool hasAes() const {
-			return aes_;
-		}
-		bool hasSsse3() const {
-			return ssse3_;
-		}
-		bool hasAvx2() const {
-			return avx2_;
-		}
+
+		inline bool hasAes() const { return aes_; }
+		inline bool hasSsse3() const { return ssse3_; }
+		inline bool hasAvx2() const { return avx2_; }
+#ifdef __riscv
+		inline bool hasRVV() const { return rvv_; }
+		inline int getRVV_Length() const { return rvv_length; }
+#endif
+
 	private:
-		bool aes_, ssse3_, avx2_;
+		bool aes_ = false;
+		bool ssse3_ = false;
+		bool avx2_ = false;
+#ifdef __riscv
+		bool rvv_ = false;
+		int rvv_length = 0;
+#endif
 	};
 
+	extern const Cpu cpu;
 }

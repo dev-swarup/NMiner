@@ -1,11 +1,10 @@
 #pragma once
 #include "rx.h"
-#include "rx_job.h"
 
 class AllocateWorker : public Napi::AsyncWorker
 {
 public:
-    AllocateWorker(Napi::Env env, Rx *rx, std::vector<uint8_t> seed_hash, std::string variant);
+    AllocateWorker(Napi::Env env, Rx *rx, std::vector<uint8_t> seed_hash);
 
     void Execute()                       override;
     void OnOK()                          override;
@@ -14,10 +13,12 @@ public:
     Napi::Promise GetPromise();
 
 private:
-    Rx *rx;
+    void Clear();
+    bool BuildDataset(randomx_flags flags);
 
-    bool result;
-    std::string variant;
+    Rx *rx;
     std::vector<uint8_t> seed_hash;
     Napi::Promise::Deferred deferred;
+
+    bool result {false};
 };

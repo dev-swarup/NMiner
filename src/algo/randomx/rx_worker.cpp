@@ -1,71 +1,87 @@
 #include <thread>
 #include <vector>
 #include <algorithm>
+#include <functional>
 
 #include "rx_worker.h"
 
-AllocateWorker::AllocateWorker(Napi::Env env, Rx *rx, std::vector<uint8_t> seed_hash, std::string variant) : Napi::AsyncWorker(env), deferred(Napi::Promise::Deferred::New(env)), rx(rx), seed_hash(std::move(seed_hash)), variant(std::move(variant)), result(false)
+namespace
 {
-}
+    void init_parallel(randomx_dataset *dataset, randomx_cache *cache, uint64_t items, int threads, const std::function<void(int)> &bind)
+    {
+        std::vector<std::thread> workers;
+        workers.reserve(static_cast<size_t>(threads));
+
+        for (int i = 0; i < threads; ++i)
+        {
+            const auto start = static_cast<uint32_t>((items * i) / threads);
+            const auto end = static_cast<uint32_t>((items * (i + 1)) / threads);
+
+            workers.emplace_back([=, &bind]
+            {
+                if (bind) bind(i);
+                randomx_init_dataset(dataset, cache, start, end - start);
+            });
+        };
+
+        for (auto &w : workers)
+        {
+            if (w.joinable()) w.join();
+        };
+    };
+};
+
+AllocateWorker::AllocateWorker(Napi::Env env, Rx *rx, std::vector<uint8_t> seed_hash) : Napi::AsyncWorker(env), rx(rx), seed_hash(std::move(seed_hash)), deferred(Napi::Promise::Deferred::New(env))
+{
+};
 
 Napi::Promise AllocateWorker::GetPromise()
 {
     return deferred.Promise();
-}
+};
 
 void AllocateWorker::Execute()
 {
     while (rx->active_vms.load(std::memory_order_acquire) > 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-    for (auto &[key, dataset] : rx->datasets)
-        if (dataset) randomx_release_dataset(dataset);
+    rx->release();
 
-    rx->datasets.clear();
-
-    if (rx->cache)
-    {
-        randomx_release_cache(rx->cache);
-        rx->cache = nullptr;
-    }
-
-    if (!variant.empty() && variant != "rx/0" && variant != "rx/monero")
-    {
-        SetError("Invalid variant: expected 'rx/0' or 'rx/monero'");
-        return;
-    }
-
-    const randomx_flags cache_flags = build_cache_flags();
-    rx->cache = randomx_alloc_cache(cache_flags);
+    rx->cache = randomx_alloc_cache(build_cache_flags());
     if (!rx->cache)
     {
         SetError("randomx_alloc_cache failed");
         return;
-    }
+    };
 
-    const size_t seed_len = std::min<size_t>(seed_hash.size(), kMaxSeedSize);
-    randomx_init_cache(rx->cache, seed_hash.data(), seed_len);
+    randomx_init_cache(rx->cache, seed_hash.data(), std::min<size_t>(seed_hash.size(), kMaxSeedSize));
 
     if (rx->m_mode != RxMode::Fast)
     {
         result = true;
         return;
-    }
+    };
 
-    randomx_flags dataset_flags = RANDOMX_FLAG_FULL_MEM;
-    if (LargePagesSupported()) dataset_flags = static_cast<randomx_flags>(dataset_flags | RANDOMX_FLAG_LARGE_PAGES);
+    randomx_flags flags = RANDOMX_FLAG_FULL_MEM;
+    if (LargePagesSupported()) flags = static_cast<randomx_flags>(flags | RANDOMX_FLAG_LARGE_PAGES);
 
-    const uint64_t item_count = randomx_dataset_item_count();
+    result = BuildDataset(flags);
+};
+
+bool AllocateWorker::BuildDataset(randomx_flags flags)
+{
+    const uint64_t items = randomx_dataset_item_count();
 
 #ifdef HAVE_HWLOC
     hwloc_topology_t topo;
-
     hwloc_topology_init(&topo);
     hwloc_topology_load(topo);
 
-    int num_nodes = hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_NUMANODE);
-    if (num_nodes <= 0) num_nodes = 1;
+    int nodes = hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_NUMANODE);
+    if (nodes <= 0) nodes = 1;
 
-    for (int n = 0; n < num_nodes; ++n)
+    bool ok = true;
+
+    for (int n = 0; n < nodes; ++n)
     {
         hwloc_obj_t node = hwloc_get_obj_by_type(topo, HWLOC_OBJ_NUMANODE, n);
         const uint32_t numa_id = node ? node->os_index : 0u;
@@ -73,101 +89,60 @@ void AllocateWorker::Execute()
         if (rx->datasets.count(numa_id))
             continue;
 
-        rx->datasets[numa_id] = randomx_alloc_dataset(dataset_flags);
-        if (!rx->datasets[numa_id])
+        randomx_dataset *dataset = randomx_alloc_dataset(flags);
+        if (!dataset)
         {
             SetError("randomx_alloc_dataset failed");
-            hwloc_topology_destroy(topo);
-            return;
-        }
+            ok = false;
 
-        int num_pus = node ? hwloc_get_nbobjs_inside_cpuset_by_type(topo, node->cpuset, HWLOC_OBJ_PU) : hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_PU);
-        if (num_pus <= 0) num_pus = 1;
+            break;
+        };
 
-        std::vector<std::thread> workers;
-        workers.reserve(static_cast<size_t>(num_pus));
+        rx->datasets[numa_id] = dataset;
 
-        for (int i = 0; i < num_pus; ++i)
+        int pus = node ? hwloc_get_nbobjs_inside_cpuset_by_type(topo, node->cpuset, HWLOC_OBJ_PU) : hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_PU);
+        if (pus <= 0) pus = 1;
+
+        init_parallel(dataset, rx->cache, items, pus, [&](int i)
         {
-            const auto start = static_cast<uint32_t>((item_count * i) / num_pus);
-            const auto end = static_cast<uint32_t>((item_count * (i + 1)) / num_pus);
-            const uint32_t sz = end - start;
-
             hwloc_obj_t pu = node ? hwloc_get_obj_inside_cpuset_by_type(topo, node->cpuset, HWLOC_OBJ_PU, i) : hwloc_get_obj_by_type(topo, HWLOC_OBJ_PU, i);
-            const uint32_t core_id = pu ? pu->os_index : 0u;
-
-            workers.emplace_back([this, numa_id, start, sz, core_id, &topo]
-            {
-                hwloc_obj_t tpu = hwloc_get_obj_by_type(topo, HWLOC_OBJ_PU, static_cast<int>(core_id));
-                if (tpu) hwloc_set_cpubind(topo, tpu->cpuset, HWLOC_CPUBIND_THREAD);
-
-                const uint32_t aligned = sz - (sz % 5);
-                if (aligned > 0) randomx_init_dataset(rx->datasets[numa_id], rx->cache, start, aligned);
-                if (sz % 5) randomx_init_dataset(rx->datasets[numa_id], rx->cache, start + aligned, sz % 5); 
-            });
-        }
-
-        for (auto &w : workers)
-            if (w.joinable()) w.join();
-    }
+            if (pu) hwloc_set_cpubind(topo, pu->cpuset, HWLOC_CPUBIND_THREAD);
+        });
+    };
 
     hwloc_topology_destroy(topo);
+    return ok;
 #else
-    rx->datasets[0] = randomx_alloc_dataset(dataset_flags);
-    if (!rx->datasets[0])
+    randomx_dataset *dataset = randomx_alloc_dataset(flags);
+    if (!dataset)
     {
         SetError("randomx_alloc_dataset failed");
-        return;
-    }
+        return false;
+    };
 
-    const int cpu_count = static_cast<int>(std::thread::hardware_concurrency());
+    rx->datasets[0] = dataset;
 
-    if (cpu_count <= 1)
-    {
-        randomx_init_dataset(rx->datasets[0], rx->cache, 0, static_cast<uint32_t>(item_count));
-    }
-    else
-    {
-        std::vector<std::thread> workers;
-        workers.reserve(static_cast<size_t>(cpu_count));
+    const int cpus = static_cast<int>(std::thread::hardware_concurrency());
+    init_parallel(dataset, rx->cache, items, cpus > 0 ? cpus : 1, nullptr);
 
-        for (int i = 0; i < cpu_count; ++i)
-        {
-            const auto start = static_cast<uint32_t>((item_count * i) / cpu_count);
-            const auto end = static_cast<uint32_t>((item_count * (i + 1)) / cpu_count);
-            const uint32_t sz = end - start;
-
-            workers.emplace_back([this, start, sz]
-            {
-                const uint32_t aligned = sz - (sz % 5);
-                if (aligned > 0) randomx_init_dataset(rx->datasets[0], rx->cache, start, aligned);
-                if (sz % 5) randomx_init_dataset(rx->datasets[0], rx->cache, start + aligned, sz % 5); 
-            });
-        }
-
-        for (auto &w : workers)
-            if (w.joinable()) w.join();
-    }
+    return true;
 #endif
-    result = true;
-}
+};
+
+void AllocateWorker::Clear()
+{
+    std::lock_guard<std::mutex> lock(rx->mutex);
+    rx->updating = false;
+};
 
 void AllocateWorker::OnOK()
 {
-    {
-        std::lock_guard<std::mutex> lock(rx->mutex);
-        rx->updating = false;
-    }
-
+    Clear();
     deferred.Resolve(Napi::Boolean::New(Env(), result));
-}
+};
 
 void AllocateWorker::OnError(const Napi::Error &err)
 {
-    {
-        std::lock_guard<std::mutex> lock(rx->mutex);
-        rx->updating = false;
-    }
-
+    Clear();
     deferred.Reject(err.Value());
-}
+};

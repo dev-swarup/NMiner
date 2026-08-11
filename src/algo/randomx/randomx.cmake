@@ -109,15 +109,25 @@ if (CMAKE_CXX_COMPILER_ID MATCHES GNU OR CMAKE_CXX_COMPILER_ID MATCHES Clang)
 endif()
 
 if (WITH_SSE4_1)
+    add_definitions(-DWITH_SSE4_1)
+    list(APPEND SOURCES ${RANDOMX_INCLUDE}/blake2/blake2b_sse41.c)
+
     if (CMAKE_C_COMPILER_ID MATCHES GNU OR CMAKE_C_COMPILER_ID MATCHES Clang)
-        set_source_files_properties(${RANDOMX_INCLUDE}/blake2/blake2b.c      PROPERTIES COMPILE_FLAGS "-Ofast -msse4.1")
+        set_source_files_properties(${RANDOMX_INCLUDE}/blake2/blake2b.c       PROPERTIES COMPILE_FLAGS "-Ofast")
+        set_source_files_properties(${RANDOMX_INCLUDE}/blake2/blake2b_sse41.c PROPERTIES COMPILE_FLAGS "-Ofast -msse4.1")
     endif()
 endif()
 
 if (WITH_AVX2)
-    if (CMAKE_C_COMPILER_ID MATCHES GNU OR CMAKE_C_COMPILER_ID MATCHES Clang)
-        set_source_files_properties(${RANDOMX_INCLUDE}/argon2_avx2.c         PROPERTIES COMPILE_FLAGS "-Ofast -mavx2")
-        set_source_files_properties(${RANDOMX_INCLUDE}/argon2_ssse3.c        PROPERTIES COMPILE_FLAGS "-Ofast -mssse3")
+    add_definitions(-DWITH_AVX2)
+    list(APPEND SOURCES ${RANDOMX_INCLUDE}/blake2/avx2/blake2b_avx2.c)
+
+    if (MSVC)
+        set_source_files_properties(${RANDOMX_INCLUDE}/blake2/avx2/blake2b_avx2.c PROPERTIES COMPILE_FLAGS "/arch:AVX2")
+    elseif (CMAKE_C_COMPILER_ID MATCHES GNU OR CMAKE_C_COMPILER_ID MATCHES Clang)
+        set_source_files_properties(${RANDOMX_INCLUDE}/blake2/avx2/blake2b_avx2.c PROPERTIES COMPILE_FLAGS "-Ofast -mavx2")
+        set_source_files_properties(${RANDOMX_INCLUDE}/argon2_avx2.c              PROPERTIES COMPILE_FLAGS "-Ofast -mavx2")
+        set_source_files_properties(${RANDOMX_INCLUDE}/argon2_ssse3.c             PROPERTIES COMPILE_FLAGS "-Ofast -mssse3")
     endif()
 endif()
 
@@ -228,49 +238,74 @@ endif()
 
 if(ARCH_ID STREQUAL "riscv64")
     list(APPEND SOURCES
+        ${RANDOMX_INCLUDE}/aes_hash_rv64_vector.cpp
+        ${RANDOMX_INCLUDE}/aes_hash_rv64_zvkned.cpp
         ${RANDOMX_INCLUDE}/jit_compiler_rv64_static.S
-        ${RANDOMX_INCLUDE}/jit_compiler_rv64.cpp)
+        ${RANDOMX_INCLUDE}/jit_compiler_rv64.cpp
+        ${RANDOMX_INCLUDE}/jit_compiler_rv64_vector.cpp
+        ${RANDOMX_INCLUDE}/jit_compiler_rv64_vector_static.S
+        ${RANDOMX_INCLUDE}/cpu_rv64.S)
 
-    set_property(SOURCE ${RANDOMX_INCLUDE}/jit_compiler_rv64_static.S PROPERTY LANGUAGE C)
-    set_property(SOURCE ${RANDOMX_INCLUDE}/jit_compiler_rv64_static.S PROPERTY XCODE_EXPLICIT_FILE_TYPE sourcecode.asm)
+    foreach(rv_asm jit_compiler_rv64_static.S jit_compiler_rv64_vector_static.S cpu_rv64.S)
+        set_property(SOURCE ${RANDOMX_INCLUDE}/${rv_asm} PROPERTY LANGUAGE C)
+        set_property(SOURCE ${RANDOMX_INCLUDE}/${rv_asm} PROPERTY XCODE_EXPLICIT_FILE_TYPE sourcecode.asm)
+    endforeach()
 
     set(RVARCH "rv64gc")
 
     if(ARCH STREQUAL "native")
         enable_language(ASM)
 
-        try_run(RANDOMX_ZBA_RUN_FAIL RANDOMX_ZBA_COMPILE_OK
-            ${CMAKE_CURRENT_BINARY_DIR}/
-            ${RANDOMX_INCLUDE}/tests/riscv64_zba.s
-            COMPILE_DEFINITIONS "-march=rv64gc_zba")
+        foreach(rv_ext vector zicbop zba zbb zvkb zvkned)
+            string(TOUPPER ${rv_ext} rv_ext_uc)
 
-        if (RANDOMX_ZBA_COMPILE_OK AND NOT RANDOMX_ZBA_RUN_FAIL)
-            set(RVARCH_ZBA ON)
-            message(STATUS "RISC-V zba extension detected")
-        else()
-            set(RVARCH_ZBA OFF)
+            if(rv_ext STREQUAL "vector")
+                set(rv_probe_arch "rv64gcv")
+            elseif(rv_ext MATCHES "^zvk")
+                set(rv_probe_arch "rv64gcv_${rv_ext}")
+            else()
+                set(rv_probe_arch "rv64gc_${rv_ext}")
+            endif()
+
+            try_run(RANDOMX_${rv_ext_uc}_RUN_FAIL RANDOMX_${rv_ext_uc}_COMPILE_OK
+                ${CMAKE_CURRENT_BINARY_DIR}/
+                ${RANDOMX_INCLUDE}/tests/riscv64_${rv_ext}.s
+                COMPILE_DEFINITIONS "-march=${rv_probe_arch}")
+
+            if (RANDOMX_${rv_ext_uc}_COMPILE_OK AND NOT RANDOMX_${rv_ext_uc}_RUN_FAIL)
+                set(RVARCH_${rv_ext_uc} ON)
+                message(STATUS "RISC-V ${rv_ext} extension detected")
+            else()
+                set(RVARCH_${rv_ext_uc} OFF)
+            endif()
+        endforeach()
+
+        if (RVARCH_VECTOR)
+            set(RVARCH "${RVARCH}v")
         endif()
 
-        try_run(RANDOMX_ZBB_RUN_FAIL RANDOMX_ZBB_COMPILE_OK
-            ${CMAKE_CURRENT_BINARY_DIR}/
-            ${RANDOMX_INCLUDE}/tests/riscv64_zbb.s
-            COMPILE_DEFINITIONS "-march=rv64gc_zbb")
-
-        if (RANDOMX_ZBB_COMPILE_OK AND NOT RANDOMX_ZBB_RUN_FAIL)
-            set(RVARCH_ZBB ON)
-            message(STATUS "RISC-V zbb extension detected")
-        else()
-            set(RVARCH_ZBB OFF)
-        endif()
-
-        if (RVARCH_ZBA)
-            set(RVARCH "${RVARCH}_zba")
-        endif()
-
-        if (RVARCH_ZBB)
-            set(RVARCH "${RVARCH}_zbb")
-        endif()
+        foreach(rv_ext ZICBOP ZBA ZBB ZVKB ZVKNED)
+            if (RVARCH_${rv_ext})
+                string(TOLOWER ${rv_ext} rv_ext_lc)
+                set(RVARCH "${RVARCH}_${rv_ext_lc}")
+            endif()
+        endforeach()
     endif()
 
     add_flag("-march=${RVARCH}")
+
+    set(RV64_VECTOR_ARCH "rv64gcv")
+
+    if(ARCH STREQUAL "native")
+        foreach(rv_ext ZICBOP ZBA ZBB ZVKB)
+            if (RVARCH_${rv_ext})
+                string(TOLOWER ${rv_ext} rv_ext_lc)
+                set(RV64_VECTOR_ARCH "${RV64_VECTOR_ARCH}_${rv_ext_lc}")
+            endif()
+        endforeach()
+    endif()
+
+    set_source_files_properties(${RANDOMX_INCLUDE}/jit_compiler_rv64_vector_static.S PROPERTIES COMPILE_FLAGS "-march=${RV64_VECTOR_ARCH}_zvkned")
+    set_source_files_properties(${RANDOMX_INCLUDE}/aes_hash_rv64_vector.cpp          PROPERTIES COMPILE_FLAGS "-O3 -march=${RV64_VECTOR_ARCH}")
+    set_source_files_properties(${RANDOMX_INCLUDE}/aes_hash_rv64_zvkned.cpp          PROPERTIES COMPILE_FLAGS "-O3 -march=${RV64_VECTOR_ARCH}_zvkned")
 endif()

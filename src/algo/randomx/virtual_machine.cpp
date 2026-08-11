@@ -113,20 +113,22 @@ namespace randomx {
 	void VmBase<Allocator, softAes>::allocate() {
 		if (datasetPtr == nullptr)
 			throw std::invalid_argument("Cache/Dataset not set");
+#ifndef __riscv
 		if (!softAes) { //if hardware AES is not supported, it's better to fail now than to return a ticking bomb
 			rx_vec_i128 tmp = rx_load_vec_i128((const rx_vec_i128*)&aesDummy);
 			tmp = rx_aesenc_vec_i128(tmp, tmp);
 			rx_store_vec_i128((rx_vec_i128*)&aesDummy, tmp);
 		}
+#endif
 	}
 
 	template<class Allocator, bool softAes>
 	void VmBase<Allocator, softAes>::getFinalResult(void* out, size_t outSize) {
 #ifdef WITH_VAES
-		if (!softAes && vaes512_available) 
+		if (!softAes && vaes512_available)
 		{
 			hashAes1Rx4_VAES512(scratchpad, ScratchpadSize, &reg.a);
-		} 
+		}
 		else
 #endif
 		{
@@ -138,10 +140,10 @@ namespace randomx {
 	template<class Allocator, bool softAes>
 	void VmBase<Allocator, softAes>::hashAndFill(void* out, size_t outSize, uint64_t *fill_state) {
 #ifdef WITH_VAES
-		if (!softAes && vaes512_available) 
+		if (!softAes && vaes512_available)
 		{
 			hashAndFillAes1Rx4_VAES512((void*) getScratchpad(), ScratchpadSize, &reg.a, fill_state);
-		} 
+		}
 		else
 #endif
 		{

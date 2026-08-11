@@ -36,10 +36,16 @@ extern "C" {
 	void randomx_program_loop_load();
 	void randomx_program_start();
 	void randomx_program_read_dataset();
+	void randomx_program_read_dataset_v2();
 	void randomx_program_read_dataset_sshash_init();
+	void randomx_program_read_dataset_sshash_init_v2();
 	void randomx_program_read_dataset_sshash_fin();
 	void randomx_program_loop_store();
+	void randomx_program_loop_store_hard_aes();
+	void randomx_program_loop_store_soft_aes();
 	void randomx_program_loop_end();
+	void randomx_program_soft_aes();
+	void randomx_program_soft_aes_end();
 	void randomx_dataset_init();
 	void randomx_program_epilogue();
 	void randomx_sshash_load();

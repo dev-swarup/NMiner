@@ -36,6 +36,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "dataset.hpp"
 #include "intrin_portable.h"
 #include "reciprocal.h"
+#include "soft_aes.h"
 
 namespace randomx {
 
@@ -60,7 +61,7 @@ namespace randomx {
 		for(unsigned i = 0; i < RegisterCountFlt; ++i)
 			nreg.a[i] = rx_load_vec_f128(&reg.a[i].lo);
 
-		compileProgram(program, bytecode, nreg);
+		compileProgram(program, bytecode, nreg, randomx_vm::vmFlags);
 
 		uint32_t spAddr0 = mem.mx;
 		uint32_t spAddr1 = mem.ma;
@@ -81,19 +82,43 @@ namespace randomx {
 			for (unsigned i = 0; i < RegisterCountFlt; ++i)
 				nreg.e[i] = maskRegisterExponentMantissa(config, rx_cvt_packed_int_vec_f128(scratchpad + spAddr1 + 8 * (RegisterCountFlt + i)));
 
-			executeBytecode(bytecode, scratchpad, config);
+			executeBytecode(bytecode, scratchpad, config, randomx_vm::getFlags());
 
-			mem.mx ^= nreg.r[config.readReg2] ^ nreg.r[config.readReg3];
-			mem.mx &= CacheLineAlignMask;
-			datasetPrefetch(datasetOffset + mem.mx);
-			datasetRead(datasetOffset + mem.ma, nreg.r);
+			const uint64_t readPtr = datasetOffset + (mem.ma & CacheLineAlignMask);
+
+			auto& mp = (randomx_vm::getFlags() & RANDOMX_FLAG_V2) ? mem.ma : mem.mx;
+			mp ^= nreg.r[config.readReg2] ^ nreg.r[config.readReg3];
+
+			datasetPrefetch(datasetOffset + (mp & CacheLineAlignMask));
+			datasetRead(readPtr, nreg.r);
 			std::swap(mem.mx, mem.ma);
 
 			for (unsigned i = 0; i < RegistersCount; ++i)
 				store64(scratchpad + spAddr1 + 8 * i, nreg.r[i]);
 
-			for (unsigned i = 0; i < RegisterCountFlt; ++i)
-				nreg.f[i] = rx_xor_vec_f128(nreg.f[i], nreg.e[i]);
+			if (randomx_vm::getFlags() & RANDOMX_FLAG_V2) {
+				rx_vec_i128 ekey[RegisterCountFlt];
+				rx_vec_i128 freg[RegisterCountFlt];
+
+				for (unsigned i = 0; i < RegisterCountFlt; ++i) {
+					ekey[i] = rx_cast_vec_f2i(nreg.e[i]);
+					freg[i] = rx_cast_vec_f2i(nreg.f[i]);
+				}
+
+				for (unsigned i = 0; i < RegisterCountFlt; ++i) {
+					freg[0] = aesenc<softAes>(freg[0], ekey[i]);
+					freg[1] = aesdec<softAes>(freg[1], ekey[i]);
+					freg[2] = aesenc<softAes>(freg[2], ekey[i]);
+					freg[3] = aesdec<softAes>(freg[3], ekey[i]);
+				}
+
+				for (unsigned i = 0; i < RegisterCountFlt; ++i)
+					nreg.f[i] = rx_cast_vec_i2f(freg[i]);
+			}
+			else {
+				for (unsigned i = 0; i < RegisterCountFlt; ++i)
+					nreg.f[i] = rx_xor_vec_f128(nreg.f[i], nreg.e[i]);
+			}
 
 			for (unsigned i = 0; i < RegisterCountFlt; ++i)
 				rx_store_vec_f128((double*)(scratchpad + spAddr0 + 16 * i), nreg.f[i]);

@@ -49,9 +49,12 @@ namespace randomx {
 		void operator delete(void* ptr) {
 			AlignedAllocator<CacheLineSize>::freeMemory(ptr, sizeof(CompiledVm));
 		}
-		CompiledVm();
+		explicit CompiledVm(randomx_flags flags);
 		void setDataset(randomx_dataset* dataset) override;
 		void run(void* seed) override;
+
+		void setFlagV2() override { randomx_vm::setFlagV2(); compiler.setFlags(randomx_vm::getFlags()); }
+		void clearFlagV2() override { randomx_vm::clearFlagV2(); compiler.setFlags(randomx_vm::getFlags()); }
 
 		using VmBase<Allocator, softAes>::mem;
 		using VmBase<Allocator, softAes>::program;

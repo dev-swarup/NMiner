@@ -98,7 +98,7 @@ namespace randomx {
 	OPCODE_CEIL_DECLARE(NOP, ISTORE);
 #undef OPCODE_CEIL_DECLARE
 
-#define RANDOMX_EXE_ARGS InstructionByteCode& ibc, int& pc, uint8_t* scratchpad, ProgramConfiguration& config
+#define RANDOMX_EXE_ARGS InstructionByteCode& ibc, int& pc, uint8_t* scratchpad, ProgramConfiguration& config, randomx_flags flags
 #define RANDOMX_GEN_ARGS Instruction& instr, int i, InstructionByteCode& ibc
 
 	class BytecodeMachine;
@@ -114,19 +114,19 @@ namespace randomx {
 			nreg = &regFile;
 		}
 
-		void compileProgram(Program& program, InstructionByteCode bytecode[RANDOMX_PROGRAM_SIZE], NativeRegisterFile& regFile) {
+		void compileProgram(Program& program, InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE], NativeRegisterFile& regFile, randomx_flags flags) {
 			beginCompilation(regFile);
-			for (unsigned i = 0; i < RANDOMX_PROGRAM_SIZE; ++i) {
+			for (unsigned i = 0, n = Program::getSize(flags); i < n; ++i) {
 				auto& instr = program(i);
 				auto& ibc = bytecode[i];
 				compileInstruction(instr, i, ibc);
 			}
 		}
 
-		static void executeBytecode(InstructionByteCode bytecode[RANDOMX_PROGRAM_SIZE], uint8_t* scratchpad, ProgramConfiguration& config) {
-			for (int pc = 0; pc < RANDOMX_PROGRAM_SIZE; ++pc) {
+		static void executeBytecode(InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE], uint8_t* scratchpad, ProgramConfiguration& config, randomx_flags flags) {
+			for (int pc = 0, n = Program::getSize(flags); pc < n; ++pc) {
 				auto& ibc = bytecode[pc];
-				executeInstruction(ibc, pc, scratchpad, config);
+				executeInstruction(ibc, pc, scratchpad, config, flags);
 			}
 		}
 
@@ -259,7 +259,10 @@ namespace randomx {
 		}
 
 		static void exe_CFROUND(RANDOMX_EXE_ARGS) {
-			rx_set_rounding_mode(rotr(*ibc.isrc, ibc.imm) % 4);
+			uint64_t isrc = rotr(*ibc.isrc, ibc.imm);
+			if (((flags & RANDOMX_FLAG_V2) == 0) || ((isrc & 60) == 0)) {
+				rx_set_rounding_mode(isrc % 4);
+			}
 		}
 
 		static void exe_ISTORE(RANDOMX_EXE_ARGS) {

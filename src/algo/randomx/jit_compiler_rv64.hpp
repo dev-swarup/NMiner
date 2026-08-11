@@ -46,24 +46,37 @@ namespace randomx {
 		~JitCompilerRV64();
 		void generateProgram(Program&, ProgramConfiguration&);
 		void generateProgramLight(Program&, ProgramConfiguration&, uint32_t);
-		void generateSuperscalarHash(SuperscalarProgram programs[RANDOMX_CACHE_ACCESSES], std::vector<uint64_t>&);
+		void generateSuperscalarHash(SuperscalarProgramList &programs, std::vector<uint64_t>&);
 		void generateDatasetInitCode() {}
 		ProgramFunc* getProgramFunc() {
-			return (ProgramFunc*)entryProgram;
+			return (ProgramFunc*)(vectorCode ? entryProgramVector : entryProgram);
 		}
 		DatasetInitFunc* getDatasetInitFunc() {
-			return (DatasetInitFunc*)entryDataInit;
+			return (DatasetInitFunc*)((vectorCode && (vectorRegisterLength >= 256)) ? entryDataInitVector : entryDataInit);
 		}
 		uint8_t* getCode() {
-			return state.code;
+			return vectorCode ? vectorCode : state.code;
 		}
 		size_t getCodeSize();
 		void enableWriting();
 		void enableExecution();
 		void enableAll();
+
+		void setFlags(randomx_flags f) { flags = f; }
+
+		static uint8_t instMap[256];
 	private:
 		CompilerState state;
-		void* entryDataInit;
-		void* entryProgram;
+
+		randomx_flags flags;
+
+		uint8_t* vectorCode = nullptr;
+		size_t vectorCodeSize = 0;
+		int vectorRegisterLength = 0;
+
+		void* entryDataInit = nullptr;
+		void* entryDataInitVector = nullptr;
+		void* entryProgram = nullptr;
+		void* entryProgramVector = nullptr;
 	};
 }

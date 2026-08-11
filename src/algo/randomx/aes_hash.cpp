@@ -27,7 +27,13 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "soft_aes.h"
+#include "cpu.hpp"
 #include <cassert>
+
+#ifdef __riscv
+#include "aes_hash_rv64_zvkned.hpp"
+#include "aes_hash_rv64_vector.hpp"
+#endif
 
 //NOTE: The functions below were tuned for maximum performance
 //and are not cryptographically secure outside of the scope of RandomX.
@@ -60,13 +66,26 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 template<bool softAes>
 void hashAes1Rx4(const void *input, size_t inputSize, void *hash) {
 	assert(inputSize % 64 == 0);
+
+#ifdef __riscv
+	if (!softAes) {
+		hashAes1Rx4_zvkned(input, inputSize, hash);
+		return;
+	}
+
+	if (randomx::cpu.hasRVV() && (randomx::cpu.getRVV_Length() >= 256)) {
+		hashAes1Rx4_RVV(input, inputSize, hash);
+		return;
+	}
+#endif
+
 	const uint8_t* inptr = (uint8_t*)input;
 	const uint8_t* inputEnd = inptr + inputSize;
 
 	rx_vec_i128 state0, state1, state2, state3;
 	rx_vec_i128 in0, in1, in2, in3;
 
-	//intial state
+	//initial state
 	state0 = rx_set_int_vec_i128(AES_HASH_1R_STATE0);
 	state1 = rx_set_int_vec_i128(AES_HASH_1R_STATE1);
 	state2 = rx_set_int_vec_i128(AES_HASH_1R_STATE2);
@@ -132,6 +151,19 @@ template void hashAes1Rx4<true>(const void *input, size_t inputSize, void *hash)
 template<bool softAes>
 void fillAes1Rx4(void *state, size_t outputSize, void *buffer) {
 	assert(outputSize % 64 == 0);
+
+#ifdef __riscv
+	if (!softAes) {
+		fillAes1Rx4_zvkned(state, outputSize, buffer);
+		return;
+	}
+
+	if (randomx::cpu.hasRVV() && (randomx::cpu.getRVV_Length() >= 256)) {
+		fillAes1Rx4_RVV(state, outputSize, buffer);
+		return;
+	}
+#endif
+
 	const uint8_t* outptr = (uint8_t*)buffer;
 	const uint8_t* outputEnd = outptr + outputSize;
 
@@ -187,6 +219,19 @@ template void fillAes1Rx4<false>(void *state, size_t outputSize, void *buffer);
 template<bool softAes>
 void fillAes4Rx4(void *state, size_t outputSize, void *buffer) {
 	assert(outputSize % 64 == 0);
+
+#ifdef __riscv
+	if (!softAes) {
+		fillAes4Rx4_zvkned(state, outputSize, buffer);
+		return;
+	}
+
+	if (randomx::cpu.hasRVV() && (randomx::cpu.getRVV_Length() >= 256)) {
+		fillAes4Rx4_RVV(state, outputSize, buffer);
+		return;
+	}
+#endif
+
 	const uint8_t* outptr = (uint8_t*)buffer;
 	const uint8_t* outputEnd = outptr + outputSize;
 
@@ -242,6 +287,18 @@ template void fillAes4Rx4<false>(void *state, size_t outputSize, void *buffer);
 
 template<bool softAes>
 void hashAndFillAes1Rx4(void *scratchpad, size_t scratchpadSize, void *hash, void* fill_state) {
+#ifdef __riscv
+	if (!softAes) {
+		hashAndFillAes1Rx4_zvkned(scratchpad, scratchpadSize, hash, fill_state);
+		return;
+	}
+
+	if (randomx::cpu.hasRVV() && (randomx::cpu.getRVV_Length() >= 256)) {
+		hashAndFillAes1Rx4_RVV(scratchpad, scratchpadSize, hash, fill_state);
+		return;
+	}
+#endif
+
 	uint8_t* scratchpadPtr = (uint8_t*)scratchpad;
 	const uint8_t* scratchpadEnd = scratchpadPtr + scratchpadSize;
 

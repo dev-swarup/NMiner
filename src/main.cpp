@@ -1,5 +1,8 @@
 #include <napi.h>
+#include <thread>
+#include <vector>
 #include <fstream>
+#include <algorithm>
 
 #include "randomx/rx.h"
 #include "randomx/rx_job.h"
@@ -160,6 +163,123 @@ Napi::Value GetNumaNodes(const Napi::CallbackInfo &info)
 #endif
 };
 
+namespace
+{
+    struct NodeCache
+    {
+        uint32_t node;
+        uint64_t l2;
+        uint64_t l3;
+        uint32_t cores;
+        uint32_t pus;
+    };
+
+    std::vector<NodeCache> ScanCaches()
+    {
+        std::vector<NodeCache> nodes;
+
+#ifdef HAVE_HWLOC
+        hwloc_topology_t topology;
+        hwloc_topology_init(&topology);
+        hwloc_topology_load(topology);
+
+        auto sum_caches = [&](hwloc_const_cpuset_t set, hwloc_obj_type_t type)
+        {
+            uint64_t total = 0;
+            const int count = set ? hwloc_get_nbobjs_inside_cpuset_by_type(topology, set, type) : hwloc_get_nbobjs_by_type(topology, type);
+
+            for (int i = 0; i < count; ++i)
+            {
+                hwloc_obj_t obj = set ? hwloc_get_obj_inside_cpuset_by_type(topology, set, type, i) : hwloc_get_obj_by_type(topology, type, i);
+                if (obj) total += obj->attr->cache.size;
+            };
+
+            return total;
+        };
+
+        int count = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NUMANODE);
+        if (count <= 0) count = 1;
+
+        for (int n = 0; n < count; ++n)
+        {
+            hwloc_obj_t node = hwloc_get_obj_by_type(topology, HWLOC_OBJ_NUMANODE, n);
+            hwloc_const_cpuset_t set = node ? node->cpuset : nullptr;
+
+            auto count_by = [&](hwloc_obj_type_t type)
+            {
+                const int n = set ? hwloc_get_nbobjs_inside_cpuset_by_type(topology, set, type) : hwloc_get_nbobjs_by_type(topology, type);
+                return static_cast<uint32_t>(n > 0 ? n : 1);
+            };
+
+            nodes.push_back({ node ? node->os_index : 0u, sum_caches(set, HWLOC_OBJ_L2CACHE), sum_caches(set, HWLOC_OBJ_L3CACHE), (HWLOC_OBJ_CORE), (HWLOC_OBJ_PU) });
+        };
+
+        hwloc_topology_destroy(topology);
+#else
+        const uint32_t hw = std::thread::hardware_concurrency();
+        nodes.push_back({ 0u, 0u, 0u, hw > 0 ? hw : 1u, hw > 0 ? hw : 1u });
+#endif
+
+        return nodes;
+    };
+
+    uint32_t ThreadsForNode(const NodeCache &node)
+    {
+        uint32_t limit = node.cores;
+
+        if (node.l3)
+            limit = std::min<uint32_t>(limit, static_cast<uint32_t>(node.l3 / RANDOMX_SCRATCHPAD_L3));
+        if (node.l2)
+            limit = std::min<uint32_t>(limit, static_cast<uint32_t>(node.l2 / RANDOMX_SCRATCHPAD_L2));
+
+        return limit > 0 ? limit : 1u;
+    };
+};
+
+Napi::Value GetCacheInfo(const Napi::CallbackInfo &info)
+{
+    Napi::Env env = info.Env();
+    const std::vector<NodeCache> nodes = ScanCaches();
+
+    Napi::Array list = Napi::Array::New(env, nodes.size());
+
+    for (size_t i = 0; i < nodes.size(); ++i)
+    {
+        Napi::Object entry = Napi::Object::New(env);
+
+        entry.Set("node", Napi::Number::New(env, nodes[i].node));
+        entry.Set("l2", Napi::Number::New(env, static_cast<double>(nodes[i].l2)));
+        entry.Set("l3", Napi::Number::New(env, static_cast<double>(nodes[i].l3)));
+        entry.Set("cores", Napi::Number::New(env, nodes[i].cores));
+        entry.Set("pus", Napi::Number::New(env, nodes[i].pus));
+        entry.Set("threads", Napi::Number::New(env, ThreadsForNode(nodes[i])));
+
+        list.Set(i, entry);
+    };
+
+    Napi::Object out = Napi::Object::New(env);
+
+    out.Set("l2PerThread", Napi::Number::New(env, RANDOMX_SCRATCHPAD_L2));
+    out.Set("l3PerThread", Napi::Number::New(env, RANDOMX_SCRATCHPAD_L3));
+    out.Set("blake2", Napi::String::New(env, Blake2ImplName()));
+    out.Set("nodes", list);
+
+    return out;
+};
+
+Napi::Value GetRecommendedThreads(const Napi::CallbackInfo &info)
+{
+    Napi::Env env = info.Env();
+    const std::vector<NodeCache> nodes = ScanCaches();
+
+    Napi::Array out = Napi::Array::New(env, nodes.size());
+
+    for (size_t i = 0; i < nodes.size(); ++i)
+        out.Set(i, Napi::Number::New(env, ThreadsForNode(nodes[i])));
+
+    return out;
+};
+
 Napi::Object Init(Napi::Env env, Napi::Object exports)
 {
     Rx::Init(env, exports);
@@ -167,6 +287,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports)
 
     exports.Set("hugePages", Napi::Function::New(env, HugePages));
     exports.Set("numaNodes", Napi::Function::New(env, GetNumaNodes));
+    exports.Set("cacheInfo", Napi::Function::New(env, GetCacheInfo));
+    exports.Set("recommendedThreads", Napi::Function::New(env, GetRecommendedThreads));
     return exports;
 };
 

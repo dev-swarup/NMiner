@@ -57,6 +57,7 @@ namespace randomx {
 		void operator delete(void* ptr) {
 			AlignedAllocator<CacheLineSize>::freeMemory(ptr, sizeof(InterpretedVm));
 		}
+		explicit InterpretedVm(randomx_flags flags) : VmBase<Allocator, softAes>(flags) {}
 		void run(void* seed) override;
 		void setDataset(randomx_dataset* dataset) override;
 	protected:
@@ -65,7 +66,7 @@ namespace randomx {
 	private:
 		void execute();
 
-		InstructionByteCode bytecode[RANDOMX_PROGRAM_SIZE];
+		InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE];
 	};
 
 	using InterpretedVmDefault = InterpretedVm<AlignedAllocator<CacheLineSize>, true>;

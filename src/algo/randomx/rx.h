@@ -15,45 +15,70 @@
 #include <hwloc.h>
 #endif
 
+static constexpr size_t kMaxSeedSize = 32;
+
 inline std::vector<uint8_t> ToVector(const Napi::Buffer<uint8_t> &buf)
 {
     return std::vector<uint8_t>(buf.Data(), buf.Data() + buf.Length());
-}
+};
 
-inline std::vector<uint32_t> ParseThreads(Napi::Env env, Napi::Value val)
+inline std::vector<uint32_t> ParseThreads(Napi::Value val)
 {
     std::vector<uint32_t> threads;
+    if (!val.IsArray()) return threads;
 
-    if (val.IsArray())
-    {
-        Napi::Array arr = val.As<Napi::Array>();
+    Napi::Array arr = val.As<Napi::Array>();
+    threads.reserve(arr.Length());
 
-        for (uint32_t i = 0; i < arr.Length(); ++i)
-            threads.push_back(arr.Get(i).As<Napi::Number>().Uint32Value());
-    }
+    for (uint32_t i = 0; i < arr.Length(); ++i)
+        threads.push_back(arr.Get(i).As<Napi::Number>().Uint32Value());
 
     return threads;
-}
+};
+
+enum class RxAlgoVersion : uint8_t
+{
+    V1 = 1,
+    V2 = 2,
+};
+
+constexpr const char *kVariantError = "Invalid variant: expected 'rx/0', 'rx/monero' or 'rx/v2'";
+
+inline bool ParseVariant(const std::string &variant, RxAlgoVersion &version)
+{
+    if (variant == "rx/0" || variant == "rx/monero")
+        version = RxAlgoVersion::V1;
+    else if (variant == "rx/v2")
+        version = RxAlgoVersion::V2;
+    else
+        return false;
+
+    return true;
+};
 
 enum class RxMode : uint8_t
 {
-    Light = 0,
     Fast = 1,
+    Light = 0,
 };
 
 bool LargePagesSupported();
+const char *Blake2ImplName();
 
-randomx_flags build_flags(RxMode mode);
+randomx_flags build_flags(RxMode mode, RxAlgoVersion version);
 randomx_flags build_cache_flags();
 
-struct randomx_numa
+struct RxVm
 {
-    uint8_t *scratchpad{nullptr};
-    randomx_vm *vm{nullptr};
-    std::atomic<int> *active_vms_ptr{nullptr};
+    RxVm(uint8_t *scratchpad, randomx_vm *vm, std::atomic<int> &active);
+    ~RxVm();
 
-    randomx_numa(uint8_t *scratchpad, randomx_vm *vm, std::atomic<int> *counter);
-    ~randomx_numa();
+    RxVm(const RxVm &) = delete;
+    RxVm &operator=(const RxVm &) = delete;
+
+    uint8_t *scratchpad;
+    randomx_vm *vm;
+    std::atomic<int> &active;
 };
 
 class Rx : public Napi::ObjectWrap<Rx>
@@ -64,16 +89,28 @@ public:
     Rx(const Napi::CallbackInfo &info);
     ~Rx();
 
+    Napi::Value hash(const Napi::CallbackInfo &info);
     Napi::Value allocate(const Napi::CallbackInfo &info);
     Napi::Value reallocate(const Napi::CallbackInfo &info);
+    Napi::Value GetVariant(const Napi::CallbackInfo &info);
 
-    std::shared_ptr<randomx_numa> create_vm(uint32_t numa_node);
+    std::shared_ptr<RxVm> create_vm(uint32_t numa_node);
+    void release();
+
+    RxAlgoVersion algo_version() const { return m_version.load(std::memory_order_relaxed); };
 
     std::mutex mutex;
-    std::atomic<bool> updating{false};
-    std::atomic<int> active_vms{0};
-    RxMode m_mode;
-    randomx_cache *cache{nullptr};
+    std::atomic<int> active_vms { 0 };
+    std::atomic<bool> updating { false };
+    RxMode m_mode { RxMode::Light };
+    randomx_cache *cache { nullptr };
 
     std::map<uint32_t, randomx_dataset *> datasets;
+
+private:
+    Napi::Value queue_allocate(const Napi::CallbackInfo &info, const std::string &variant);
+    void apply_variant(const std::string &variant);
+
+    std::string m_variant { "rx/0" };
+    std::atomic<RxAlgoVersion> m_version { RxAlgoVersion::V1 };
 };
