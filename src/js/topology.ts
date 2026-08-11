@@ -2,7 +2,7 @@ import si from "systeminformation";
 import * as logger from "./logger.js";
 
 import { version } from "../../package.json";
-import { numaNodes, hugePages } from "./miner.js";
+import { numaNodes, hugePages, recommendedThreads } from "./miner.js";
 
 let _numa: number | null = null;
 let _cpuCache: Awaited<ReturnType<typeof si.cpu>> | null = null;
@@ -65,6 +65,9 @@ export async function PrintTopology(): Promise<void> {
 };
 
 export async function MaxThreads(): Promise<number> {
+    const threads = recommendedThreads().reduce((total, n) => total + n, 0);
+    if (threads > 0) return threads;
+
     const cpu = await getCpu();
-    return Math.min(cpu.cache.l3 / 1024 / 1024 / 2, cpu.cores);
+    return Math.max(1, Math.min(Math.floor(cpu.cache.l3 / 1024 / 1024 / 2), cpu.physicalCores || cpu.cores));
 };

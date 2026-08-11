@@ -22,6 +22,15 @@ export class EventEmitter<Events extends EventMap> {
         return this;
     };
 
+    public removeAllListeners<K extends keyof Events>(event?: K): this {
+        if (event === undefined) 
+            this.listeners = Object.create(null);
+        else 
+            delete this.listeners[event as string];
+
+        return this;
+    };
+
     public async emit<K extends keyof Events>(event: K, ...args: Events[K]): Promise<void> {
         const k = event as string;
         const list = this.listeners[k];
