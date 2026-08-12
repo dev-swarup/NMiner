@@ -90,7 +90,6 @@ public:
     Rx(const Napi::CallbackInfo &info);
     ~Rx();
 
-    Napi::Value hash(const Napi::CallbackInfo &info);
     Napi::Value allocate(const Napi::CallbackInfo &info);
     Napi::Value reallocate(const Napi::CallbackInfo &info);
     Napi::Value GetVariant(const Napi::CallbackInfo &info);

@@ -31,8 +31,6 @@ export class Rx {
 
     public allocate(seed_hash: Buffer): Promise<boolean>;
     public reallocate(seed_hash: Buffer, variant?: RxVariant): Promise<boolean>;
-
-    public hash(input: Buffer): Buffer;
 }
 
 export class RxJob {

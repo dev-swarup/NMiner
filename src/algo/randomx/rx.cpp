@@ -283,8 +283,8 @@ Napi::Object Rx::Init(Napi::Env env, Napi::Object exports)
     Napi::Function Fn = DefineClass(env, "Rx", 
     {
         InstanceMethod("allocate", &Rx::allocate), 
-        InstanceMethod("reallocate", &Rx::reallocate), 
-        InstanceMethod("hash", &Rx::hash), 
+        InstanceMethod("reallocate", &Rx::reallocate),
+
         InstanceAccessor("variant", &Rx::GetVariant, nullptr)
     });
 
@@ -347,37 +347,6 @@ void Rx::release()
 Napi::Value Rx::GetVariant(const Napi::CallbackInfo &info)
 {
     return Napi::String::New(info.Env(), m_variant);
-};
-
-Napi::Value Rx::hash(const Napi::CallbackInfo &info)
-{
-    Napi::Env env = info.Env();
-
-    if (info.Length() < 1 || !info[0].IsBuffer())
-    {
-        Napi::Error::New(env, "Expected input as a Buffer").ThrowAsJavaScriptException();
-        return env.Null();
-    };
-
-    const auto input = ToVector(info[0].As<Napi::Buffer<uint8_t>>());
-
-    if (updating.load(std::memory_order_acquire))
-    {
-        Napi::Error::New(env, "Cache is being reallocated: await allocate() first").ThrowAsJavaScriptException();
-        return env.Null();
-    };
-
-    std::shared_ptr<RxVm> vm = create_vm(0);
-    if (!vm)
-    {
-        Napi::Error::New(env, "No cache allocated: call allocate() first").ThrowAsJavaScriptException();
-        return env.Null();
-    };
-
-    uint8_t out[RANDOMX_HASH_SIZE];
-    randomx_calculate_hash(vm->vm, input.data(), input.size(), out);
-
-    return Napi::Buffer<uint8_t>::Copy(env, out, sizeof(out));
 };
 
 Napi::Value Rx::allocate(const Napi::CallbackInfo &info)
