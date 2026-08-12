@@ -2,11 +2,12 @@ export type RxMode = "FAST" | "LIGHT";
 
 declare type JobResult = {
     diff: number;
+    version: number;
     txnCount?: number;
 }
 
 declare type RxVariant = "rx/0" | "rx/monero" | "rx/v2";
-declare type RxSubmitFn = (nonce: Buffer, result: Buffer) => void | Promise<void>
+declare type RxSubmitFn = (nonce: Buffer, result: Buffer, version: number) => void | Promise<void>
 
 declare type RxNodeCache = {
     node: number;
@@ -42,6 +43,8 @@ export class RxJob {
     public throttle(threads: number, ms: number): void;
 
     public get_hashes(): number;
+    public pending_nonces(): number;
+    public queue_range(start_nonce: number, nonce_limit: number): boolean;
     public send_job(blob: Buffer, diff: Buffer, nicehash: boolean, reset_nonce: boolean, start_nonce?: number, nonce_limit?: number): JobResult;
 }
 

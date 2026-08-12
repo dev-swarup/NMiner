@@ -43,6 +43,7 @@ RxJob::RxJob(const Napi::CallbackInfo &info) : Napi::ObjectWrap<RxJob>(info)
 RxJob::~RxJob()
 {
     StopLoop();
+    tsfn.Release();
 
 #ifdef HAVE_HWLOC
     if (topology) hwloc_topology_destroy(topology);
@@ -55,8 +56,10 @@ Napi::Object RxJob::Init(Napi::Env env, Napi::Object exports)
     {
         InstanceMethod("get_hashes", &RxJob::GetHashes), 
         InstanceMethod("throttle", &RxJob::Throttle), 
-        InstanceMethod("send_job", &RxJob::SendJob), 
-        InstanceMethod("start", &RxJob::Start), 
+        InstanceMethod("send_job", &RxJob::SendJob),
+        InstanceMethod("queue_range", &RxJob::QueueRange),
+        InstanceMethod("pending_nonces", &RxJob::PendingNonces),
+        InstanceMethod("start", &RxJob::Start),
         InstanceMethod("pause", &RxJob::Pause), 
         InstanceMethod("stop", &RxJob::Stop)
     });
@@ -105,20 +108,25 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo &info)
         return env.Null();
     };
 
-    uint8_t target_raw[4] = {};
+    uint64_t new_target = 0;
     {
         const auto target = ToVector(info[1].As<Napi::Buffer<uint8_t>>());
-        std::memcpy(target_raw, target.data(), std::min<size_t>(target.size(), sizeof(target_raw)));
+
+        if (target.size() >= 8)
+            new_target = read_unaligned(reinterpret_cast<const uint64_t *>(target.data()));
+        else if (target.size() >= 4)
+        {
+            const uint32_t compact = read_unaligned(reinterpret_cast<const uint32_t *>(target.data()));
+            if (compact) new_target = 0xFFFFFFFFFFFFFFFFULL / (0xFFFFFFFFULL / uint64_t(compact));
+        };
     };
 
-    const uint32_t target_u32 = read_unaligned(reinterpret_cast<const uint32_t *>(target_raw));
-    if (target_u32 == 0)
+    if (new_target == 0)
     {
-        Napi::Error::New(env, "Invalid target: expected a non-zero 4-byte target").ThrowAsJavaScriptException();
+        Napi::Error::New(env, "Invalid target: expected a non-zero 4-byte or 8-byte target").ThrowAsJavaScriptException();
         return env.Null();
     };
 
-    const uint64_t new_target = 0xFFFFFFFFFFFFFFFFULL / (0xFFFFFFFFULL / uint64_t(target_u32));
     const uint64_t new_diff = 0xFFFFFFFFFFFFFFFFULL / new_target;
 
     const bool nicehash = info[2].As<Napi::Boolean>().Value();
@@ -127,6 +135,7 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo &info)
     const uint32_t start_nonce = (info.Length() > 4 && info[4].IsNumber()) ? info[4].As<Napi::Number>().Uint32Value() : 0u;
     const uint32_t nonce_limit = (info.Length() > 5 && info[5].IsNumber()) ? info[5].As<Napi::Number>().Uint32Value() : 0xFFFFFFFFu;
 
+    uint32_t version;
     {
         std::lock_guard<std::mutex> lock(m_job_mutex);
 
@@ -134,20 +143,29 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo &info)
 
         m_size = blob_size;
         m_target = new_target;
-        m_nicehash.store(nicehash || read_unaligned(reinterpret_cast<const uint32_t *>(m_blob + kNonceOffset)) != 0, std::memory_order_relaxed);
 
-        if (info.Length() > 4)
+        const bool nicehash_active = nicehash || (read_unaligned(reinterpret_cast<const uint32_t *>(m_blob + kNonceOffset)) & kNicehashMask) != 0;
+        m_nicehash.store(nicehash_active, std::memory_order_relaxed);
+
+        const bool ranged = info.Length() > 4 && info[4].IsNumber();
+        m_ranged.store(ranged, std::memory_order_relaxed);
+
         {
-            m_nonce_counter.store(start_nonce, std::memory_order_relaxed);
-            m_nonce_limit.store(nonce_limit, std::memory_order_relaxed);
-        }
-        else if (reset_nonce)
-        {
-            m_nonce_counter.store(0, std::memory_order_relaxed);
-            m_nonce_limit.store(0xFFFFFFFFu, std::memory_order_relaxed);
+            std::lock_guard<std::mutex> range_lock(m_range_mutex);
+            m_queued.clear();
+
+            if (ranged)
+                m_range.store(pack_range(start_nonce, std::max<uint32_t>(start_nonce, nonce_limit)), std::memory_order_relaxed);
+            else
+            {
+                const uint32_t range_end = nicehash_active ? kNicehashLimit : 0xFFFFFFFFu;
+                const uint32_t range_begin = reset_nonce ? 0u : std::min<uint32_t>(static_cast<uint32_t>(m_range.load(std::memory_order_relaxed)), range_end);
+
+                m_range.store(pack_range(range_begin, range_end), std::memory_order_relaxed);
+            };
         };
 
-        m_job_version.fetch_add(1, std::memory_order_release);
+        version = m_job_version.fetch_add(1, std::memory_order_release) + 1;
     };
 
     m_cv.notify_all();
@@ -156,10 +174,52 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo &info)
 
     Napi::Object exports = Napi::Object::New(env);
     exports.Set("diff", Napi::Number::New(env, static_cast<double>(new_diff)));
+    exports.Set("version", Napi::Number::New(env, version));
 
     if (txn_count) exports.Set("txnCount", Napi::Number::New(env, txn_count));
 
     return exports;
+};
+
+Napi::Value RxJob::QueueRange(const Napi::CallbackInfo &info)
+{
+    Napi::Env env = info.Env();
+
+    if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsNumber())
+    {
+        Napi::Error::New(env, "Expected (start_nonce: number, nonce_limit: number)").ThrowAsJavaScriptException();
+        return env.Null();
+    };
+
+    const uint32_t start = info[0].As<Napi::Number>().Uint32Value();
+    const uint32_t limit = info[1].As<Napi::Number>().Uint32Value();
+
+    {
+        std::lock_guard<std::mutex> lock(m_range_mutex);
+
+        if (limit <= start || !m_ranged.load(std::memory_order_relaxed))
+            return Napi::Boolean::New(env, false);
+
+        m_queued.push_back({start, limit});
+    };
+
+    m_cv.notify_all();
+    return Napi::Boolean::New(env, true);
+};
+
+Napi::Value RxJob::PendingNonces(const Napi::CallbackInfo &info)
+{
+    const uint64_t packed = m_range.load(std::memory_order_relaxed);
+    const uint32_t current = static_cast<uint32_t>(packed), limit = static_cast<uint32_t>(packed >> 32);
+
+    uint64_t pending = current < limit ? limit - current : 0;
+
+    {
+        std::lock_guard<std::mutex> lock(m_range_mutex);
+        for (const NonceRange &range : m_queued) pending += range.limit - range.start;
+    };
+
+    return Napi::Number::New(info.Env(), static_cast<double>(pending));
 };
 
 Napi::Value RxJob::Start(const Napi::CallbackInfo &info)
@@ -267,16 +327,16 @@ void RxJob::BindThread(uint32_t core_id)
 
 void RxJob::WriteNonce(uint8_t *blob, uint32_t nonce) const
 {
-    if (m_nicehash.load(std::memory_order_relaxed))
+    if (m_nicehash.load(std::memory_order_relaxed) && !m_ranged.load(std::memory_order_relaxed))
     {
         const uint32_t existing = read_unaligned(reinterpret_cast<const uint32_t *>(blob + kNonceOffset));
-        nonce = (existing & 0xFF000000u) | (nonce & 0x00FFFFFFu);
+        nonce = (existing & kNicehashMask) | (nonce & ~kNicehashMask);
     };
 
     write_unaligned(reinterpret_cast<uint32_t *>(blob + kNonceOffset), nonce);
 };
 
-void RxJob::SubmitShare(const uint8_t *hash, const uint8_t *blob, uint64_t target)
+void RxJob::SubmitShare(const uint8_t *hash, const uint8_t *blob, uint64_t target, uint32_t version)
 {
     if (read_unaligned(reinterpret_cast<const uint64_t *>(hash + 24)) > target) [[likely]]
         return;
@@ -284,22 +344,24 @@ void RxJob::SubmitShare(const uint8_t *hash, const uint8_t *blob, uint64_t targe
     auto *r = new JobResult();
     std::memcpy(r->nonce, blob + kNonceOffset, sizeof(r->nonce));
     std::memcpy(r->result, hash, sizeof(r->result));
+    r->version = version;
 
     const napi_status status = tsfn.BlockingCall(r, [](Napi::Env env, Napi::Function jsSubmit, JobResult *result)
     {
         jsSubmit.Call({
             Napi::Buffer<uint8_t>::Copy(env, result->nonce, sizeof(result->nonce)),
             Napi::Buffer<uint8_t>::Copy(env, result->result, sizeof(result->result)),
+            Napi::Number::New(env, result->version),
         });
 
-        delete result; 
+        delete result;
     });
 
     if (status != napi_ok)
         delete r;
 };
 
-void RxJob::FlushHash(const std::shared_ptr<RxVm> &vm, const uint8_t *blob, size_t size, uint64_t target, bool &is_first)
+void RxJob::FlushHash(const std::shared_ptr<RxVm> &vm, const uint8_t *blob, size_t size, uint64_t target, uint32_t version, bool &is_first)
 {
     if (is_first || size == 0 || !vm)
         return;
@@ -307,16 +369,62 @@ void RxJob::FlushHash(const std::shared_ptr<RxVm> &vm, const uint8_t *blob, size
     uint8_t hash[RANDOMX_HASH_SIZE];
     randomx_calculate_hash_last(vm->vm, hash);
 
-    SubmitShare(hash, blob, target);
+    m_hashes_done.fetch_add(1, std::memory_order_relaxed);
+
+    SubmitShare(hash, blob, target, version);
     is_first = true;
 };
 
-bool RxJob::HasWork(size_t size) const
+bool RxJob::HasWork(size_t size)
 {
     if (size == 0 || m_paused.load(std::memory_order_relaxed))
         return false;
 
-    return m_nonce_counter.load(std::memory_order_relaxed) < m_nonce_limit.load(std::memory_order_relaxed);
+    const uint64_t packed = m_range.load(std::memory_order_relaxed);
+    if (static_cast<uint32_t>(packed) < static_cast<uint32_t>(packed >> 32))
+        return true;
+
+    std::lock_guard<std::mutex> lock(m_range_mutex);
+    return !m_queued.empty();
+};
+
+bool RxJob::AdvanceRange(uint64_t exhausted)
+{
+    std::lock_guard<std::mutex> lock(m_range_mutex);
+
+    if (m_range.load(std::memory_order_relaxed) != exhausted) return true;
+    if (m_queued.empty()) return false;
+
+    const NonceRange next = m_queued.front();
+    m_queued.pop_front();
+
+    m_range.store(pack_range(next.start, next.limit), std::memory_order_relaxed);
+    return true;
+};
+
+bool RxJob::NextNonce(uint32_t &nonce)
+{
+    if (m_paused.load(std::memory_order_relaxed))
+        return false;
+
+    for (;;)
+    {
+        uint64_t packed = m_range.load(std::memory_order_relaxed);
+
+        for (;;)
+        {
+            const uint32_t current = static_cast<uint32_t>(packed), limit = static_cast<uint32_t>(packed >> 32);
+            if (current >= limit) break;
+
+            if (m_range.compare_exchange_weak(packed, pack_range(current + 1, limit), std::memory_order_relaxed))
+            {
+                nonce = current;
+                return true;
+            };
+        };
+
+        if (!AdvanceRange(packed)) return false;
+    };
 };
 
 void RxJob::WaitForWork(size_t size, uint32_t version)
@@ -367,7 +475,7 @@ void RxJob::Loop(uint32_t core_id, uint32_t numa_node)
     {
         if (rx->updating.load(std::memory_order_acquire))
         {
-            FlushHash(vm, cur, size, target, is_first);
+            FlushHash(vm, cur, size, target, version, is_first);
             vm.reset();
 
             while (rx->updating.load(std::memory_order_acquire) && m_active.load(std::memory_order_relaxed))
@@ -385,7 +493,7 @@ void RxJob::Loop(uint32_t core_id, uint32_t numa_node)
 
         if (version != m_job_version.load(std::memory_order_acquire))
         {
-            FlushHash(vm, cur, size, target, is_first);
+            FlushHash(vm, cur, size, target, version, is_first);
 
             std::lock_guard<std::mutex> lock(m_job_mutex);
             std::memcpy(cur, m_blob, m_size);
@@ -395,14 +503,13 @@ void RxJob::Loop(uint32_t core_id, uint32_t numa_node)
             version = m_job_version.load(std::memory_order_relaxed);
         };
 
-        if (!HasWork(size))
+        uint32_t nonce = 0;
+        if (size == 0 || !NextNonce(nonce))
         {
-            FlushHash(vm, cur, size, target, is_first);
+            FlushHash(vm, cur, size, target, version, is_first);
             WaitForWork(size, version);
             continue;
         };
-
-        const uint32_t nonce = m_nonce_counter.fetch_add(1, std::memory_order_relaxed);
 
         if (is_first)
         {
@@ -421,11 +528,11 @@ void RxJob::Loop(uint32_t core_id, uint32_t numa_node)
 
         m_hashes_done.fetch_add(1, std::memory_order_relaxed);
 
-        SubmitShare(hash, cur, target);
+        SubmitShare(hash, cur, target, version);
         std::memcpy(cur, nxt, size);
 
         ApplyThrottle();
     };
 
-    FlushHash(vm, cur, size, target, is_first);
+    FlushHash(vm, cur, size, target, version, is_first);
 };

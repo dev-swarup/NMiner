@@ -61,10 +61,10 @@ void AllocateWorker::Execute()
         return;
     };
 
-    randomx_flags flags = RANDOMX_FLAG_FULL_MEM;
-    if (LargePagesSupported()) flags = static_cast<randomx_flags>(flags | RANDOMX_FLAG_LARGE_PAGES);
+    result = LargePagesSupported() && BuildDataset(static_cast<randomx_flags>(RANDOMX_FLAG_FULL_MEM | RANDOMX_FLAG_LARGE_PAGES));
+    if (!result) result = BuildDataset(RANDOMX_FLAG_FULL_MEM);
 
-    result = BuildDataset(flags);
+    if (!result) SetError("randomx_alloc_dataset failed");
 };
 
 bool AllocateWorker::BuildDataset(randomx_flags flags)
@@ -92,9 +92,7 @@ bool AllocateWorker::BuildDataset(randomx_flags flags)
         randomx_dataset *dataset = randomx_alloc_dataset(flags);
         if (!dataset)
         {
-            SetError("randomx_alloc_dataset failed");
             ok = false;
-
             break;
         };
 
@@ -115,10 +113,7 @@ bool AllocateWorker::BuildDataset(randomx_flags flags)
 #else
     randomx_dataset *dataset = randomx_alloc_dataset(flags);
     if (!dataset)
-    {
-        SetError("randomx_alloc_dataset failed");
         return false;
-    };
 
     rx->datasets[0] = dataset;
 

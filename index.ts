@@ -2,8 +2,8 @@ import os from "os";
 import * as logger from "./src/js/logger.js";
 
 import { Rx, RxJob, RxVariant, JobResult } from "./src/js/miner.js";
-import { connect, StratumClient, StratumJob } from "./src/js/connect.js";
 import { PrintTopology, MaxThreads, getNumaNodes } from "./src/js/topology.js";
+import { connect, ALGORITHMS, StratumClient, StratumJob } from "./src/js/connect.js";
 
 const PrintDiff = (i: number) => i >= 100000000 ? `${Math.round(i / 1000000)}M` : i;
 const PrintHashes = (i: number) => i > 1000 ? ((i / 1000).toFixed(2) + " kH/s") : (i + " H/s");
@@ -24,6 +24,7 @@ export interface MinerOptions {
     throttle?: boolean;
     nicehash?: boolean;
     keepalive?: boolean;
+    strictTls?: boolean;
 };
 
 export class NMiner {
@@ -41,32 +42,47 @@ export class NMiner {
 
     private m_job?: StratumJob & JobResult;
     private m_threads?: number[];
+    private m_versions: Map<number, { job_id: string, diff: number }> = new Map();
 
     private requesting_chunk: boolean = false;
-    private current_chunk?: { size: number, start_hashes: number };
+    private chunk_backoff: number = 0;
+    private chunk_rate: number = 0;
+    private chunk_meter?: { time: number, hashes: number };
 
+    private chunk_gen: number = 0;
     private _chunkPollTimeout: NodeJS.Timeout | null = null;
+
     private schedule_chunk_poll() {
         if (this._chunkPollTimeout) clearTimeout(this._chunkPollTimeout);
 
-        const poll = async () => {
-            if (this.m_job && this.current_chunk && !this.requesting_chunk && this.stratum) {
-                const hashes_done = this.rx_job.get_hashes() - this.current_chunk.start_hashes;
+        const gen = ++this.chunk_gen, poll = async () => {
+            if (gen !== this.chunk_gen) return;
 
-                if (hashes_done >= this.current_chunk.size * 0.8) {
+            if (this.m_job && this.stratum && !this.requesting_chunk) {
+                const now = Date.now(), hashes = this.rx_job.get_hashes();
+
+                if (this.chunk_meter && now > this.chunk_meter.time) {
+                    const observed = (hashes - this.chunk_meter.hashes) * 1000 / (now - this.chunk_meter.time);
+                    this.chunk_rate = this.chunk_rate ? this.chunk_rate * 0.7 + observed * 0.3 : observed;
+                };
+
+                this.chunk_meter = { time: now, hashes };
+                if (now >= this.chunk_backoff && this.rx_job.pending_nonces() < Math.max(this.chunk_rate * 10, 4096)) {
                     this.requesting_chunk = true;
 
                     try {
-                        const chunk: any = await this.stratum.send("get_chunk", { job_id: this.m_job.job_id });
-                        if (chunk && chunk.start_nonce != null) {
-                            this.current_chunk = { size: chunk.nonce_limit - chunk.start_nonce, start_hashes: this.rx_job.get_hashes() };
-                            this.rx_job.send_job(Buffer.from(this.m_job.blob, "hex"), Buffer.from(this.m_job.target, "hex"), this.options.nicehash ?? false, false, chunk.start_nonce, chunk.nonce_limit);
-                        };
-                    } finally { this.requesting_chunk = false; };
+                        const chunk: any = await this.stratum.send("get_chunk", { job_id: this.m_job.job_id, hashrate: Math.round(this.chunk_rate) });
+                        if (gen !== this.chunk_gen) return;
+
+                        if (chunk && chunk.start_nonce != null)
+                            this.rx_job.queue_range(chunk.start_nonce, chunk.nonce_limit ?? 0xFFFFFFFF);
+                        else
+                            this.chunk_backoff = Date.now() + 5000;
+                    } catch { this.chunk_backoff = Date.now() + 5000; } finally { this.requesting_chunk = false; };
                 };
             };
 
-            if (this.stratum && this.m_job)
+            if (gen === this.chunk_gen && this.stratum && this.m_job)
                 this._chunkPollTimeout = setTimeout(poll, 500);
             else
                 this._chunkPollTimeout = null;
@@ -76,9 +92,22 @@ export class NMiner {
     };
 
     private stop_chunk_poll() {
+        this.chunk_gen++;
+        this.chunk_backoff = 0;
+        this.chunk_meter = undefined;
+
         if (this._chunkPollTimeout) {
             clearTimeout(this._chunkPollTimeout);
             this._chunkPollTimeout = null;
+        };
+    };
+
+    private track_version(result: JobResult, job_id: string) {
+        this.m_versions.set(result.version, { job_id, diff: result.diff });
+
+        for (const key of this.m_versions.keys()) {
+            if (this.m_versions.size <= 16) break;
+            this.m_versions.delete(key);
         };
     };
 
@@ -95,15 +124,21 @@ export class NMiner {
         if (opts) this.options = { ...this.options, ...opts };
 
         this.rx = new Rx(this.options.algo as RxVariant, this.options.mode as any);
-        this.rx_job = new RxJob(this.rx, async (nonce: Buffer, result: Buffer) => {
+        this.rx_job = new RxJob(this.rx, async (nonce: Buffer, result: Buffer, version: number) => {
             const time = Date.now();
+            const job = this.m_versions.get(version);
 
-            if (this.stratum && this.m_job)
+            if (!job) {
+                if (this.options.logging) logger.Print(logger.CYAN_BG(" cpu     "), logger.GRAY("dropped a share mined against an expired job"));
+                return;
+            };
+
+            if (this.stratum)
                 try {
-                    await this.stratum.submit(this.m_job.job_id, nonce.toString("hex"), result.toString("hex"));
+                    await this.stratum.submit(job.job_id, nonce.toString("hex"), result.toString("hex"));
 
                     this.accepted++;
-                    logger.Print(logger.CYAN_BG(" cpu     "), `${logger.GREEN("accepted")} (${this.accepted}/${(this.rejected > 0 ? logger.RED : logger.WHITE)(String(this.rejected))}) diff ${logger.WHITE_BOLD(String(this.m_job.diff))} ${logger.GetTime(time)}`);
+                    logger.Print(logger.CYAN_BG(" cpu     "), `${logger.GREEN("accepted")} (${this.accepted}/${(this.rejected > 0 ? logger.RED : logger.WHITE)(String(this.rejected))}) diff ${logger.WHITE_BOLD(String(job.diff))} ${logger.GetTime(time)}`);
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
 
@@ -151,40 +186,69 @@ export class NMiner {
         };
     };
 
+    private retry_delay: number = 5000;
+    private schedule_reconnect() {
+        const delay = Math.round(this.retry_delay * (0.8 + Math.random() * 0.4));
+        this.retry_delay = Math.min(this.retry_delay * 2, 300000);
+
+        if (this.options.logging) logger.Print(logger.BLUE_BG(" net     "), `reconnecting in ${logger.WHITE_BOLD(String(Math.round(delay / 1000)))}s`);
+        setTimeout(() => this.reconnect(), delay);
+    };
+
+    private apply_algo(job: StratumJob): boolean {
+        if (!job.algo) return true;
+
+        if (!ALGORITHMS.includes(job.algo)) {
+            this.logger_error(new Error(`pool announced unsupported algorithm "${job.algo}" (this miner supports ${ALGORITHMS.join(", ")})`));
+            return false;
+        };
+
+        this.options.algo = job.algo as RxVariant;
+        return true;
+    };
+
     private async reconnect() {
         try {
-            this.stratum = await connect(this.pool, this.options?.proxy, this.options?.keepalive);
-            if (this.options.logging) logger.Print(logger.BLUE_BG(" net     "), `use pool ${logger.CYAN(`${this.stratum.host}`)} ${logger.GRAY(this.stratum.remoteAddress)}`);
+            const stratum = this.stratum = await connect(this.pool, this.options?.proxy, this.options?.keepalive, this.options?.strictTls);
+            if (this.options.logging) logger.Print(logger.BLUE_BG(" net     "), `use pool ${logger.CYAN(`${stratum.host}`)} ${logger.GRAY(stratum.remoteAddress)}`);
 
             const numa = getNumaNodes();
             const max_threads = await MaxThreads();
             const used_threads = this.options.threads || max_threads;
 
-            const job = await this.stratum.login(this.address, this.pass, used_threads);
+            stratum
+                .on("job", async (job) => {
+                    if (this.stratum !== stratum) return;
 
-            if (job.algo)
-                this.options.algo = job.algo as RxVariant;
+                    if (!this.apply_algo(job)) return stratum.close();
+                    this.on_job(job);
+                })
+                .on("close", async () => {
+                    if (this.stratum === stratum) this.stratum = undefined;
+
+                    this.rx_job.stop();
+                    this.stop_chunk_poll();
+                    this.schedule_reconnect();
+                });
+
+            this.m_versions.clear();
+            const job = await stratum.login(this.address, this.pass, used_threads);
+
+            if (!this.apply_algo(job)) return stratum.close();
 
             if (await this.on_job(job)) {
                 this.m_threads = DistributeThreads(used_threads, numa);
                 this.rx_job.start(this.m_threads);
 
-                this.stratum
-                    .on("job", async (job) => {
-                        if (job.algo)
-                            this.options.algo = job.algo as RxVariant;
-
-                        this.on_job(job);
-                    })
-                    .on("close", async () => {
-                        this.rx_job.stop();
-                        this.stop_chunk_poll();
-                        setTimeout(() => this.reconnect(), 5000);
-                    });
+                this.retry_delay = 5000;
             };
         } catch (err) {
             this.logger_error(err);
-            setTimeout(() => this.reconnect(), 5000);
+
+            if (this.stratum)
+                this.stratum.close();
+            else
+                this.schedule_reconnect();
         };
     };
 
@@ -198,6 +262,9 @@ export class NMiner {
         await previous_lock;
 
         try {
+            if (this.m_job && this.m_job.job_id === job.job_id && this.m_job.blob === job.blob && this.m_job.start_nonce === job.start_nonce)
+                return true;
+
             if (job.seed_hash != this.m_job?.seed_hash || (this.options.algo && this.rx.variant != this.options.algo))
                 try {
                     this.rx_job.stop();
@@ -227,12 +294,13 @@ export class NMiner {
 
             this.logger_new_job(result.diff, job.height, result.txnCount);
 
+            this.track_version(result, job.job_id);
             this.m_job = Object.assign({} as any, job, result);
 
-            if (job.start_nonce != null) {
-                this.current_chunk = { size: job.nonce_limit! - job.start_nonce, start_hashes: this.rx_job.get_hashes() };
+            if (job.start_nonce != null)
                 this.schedule_chunk_poll();
-            };
+            else
+                this.stop_chunk_poll();
 
             return true;
         } finally { release(); };
