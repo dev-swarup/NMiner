@@ -9,25 +9,29 @@ import { version } from "../../package.json";
 import { EventEmitter } from "./utils.js";
 import { hash, encrypt, decrypt, createExchange } from "./crypto.js";
 
-const _dnsCache = new Map<string, string>();
-function ResolveHostname(hostname: string): Promise<string> {
-    const cached = _dnsCache.get(hostname);
-    if (cached) return Promise.resolve(cached);
+const DNS_TTL = 300000;
+const _dnsCache = new Map<string, { address: string, expires: number }>();
 
+export function InvalidateHostname(hostname: string): void {
+    _dnsCache.delete(hostname);
+};
+
+function Lookup(hostname: string, family: 4 | 6): Promise<string | null> {
     if ((process as any).isBun && (dns as any).lookup?.length === 0)
-        return (dns as any).lookup(hostname, { family: 4 }).then((res: any) => {
-            const addr: string = res?.address ?? hostname;
-            _dnsCache.set(hostname, addr);
+        return (dns as any).lookup(hostname, { family }).then((res: any) => res?.address ?? null).catch(() => null);
 
-            return addr;
-        }).catch(() => hostname);
+    return new Promise((resolve) => dns.lookup(hostname, { family }, (err, address) => resolve(err || !address ? null : address)));
+};
 
-    return new Promise((resolve) => dns.lookup(hostname, { family: 4 }, (err, address) => {
-        const addr = err || !address ? hostname : address;
-        _dnsCache.set(hostname, addr);
+async function ResolveHostname(hostname: string): Promise<string> {
+    const cached = _dnsCache.get(hostname);
+    if (cached && cached.expires > Date.now()) return cached.address;
 
-        resolve(addr);
-    }));
+    const address = await Lookup(hostname, 4) ?? await Lookup(hostname, 6);
+    if (!address) return hostname;
+
+    _dnsCache.set(hostname, { address, expires: Date.now() + DNS_TTL });
+    return address;
 };
 
 export type StratumJob = {
@@ -41,6 +45,24 @@ export type StratumJob = {
 
     start_nonce?: number;
     nonce_limit?: number;
+};
+
+export const ALGORITHMS = ["rx/0", "rx/monero", "rx/v2"];
+
+function NormalizeJob(raw: any): StratumJob | null {
+    if (!raw || typeof raw.blob !== "string" || typeof raw.job_id !== "string" || typeof raw.target !== "string" || typeof raw.seed_hash !== "string")
+        return null;
+
+    return {
+        blob: raw.blob,
+        job_id: raw.job_id,
+        target: raw.target,
+        seed_hash: raw.seed_hash,
+        ...(raw.algo !== undefined ? { algo: raw.algo } : {}),
+        ...(raw.height !== undefined ? { height: raw.height } : {}),
+        ...(raw.start_nonce !== undefined ? { start_nonce: raw.start_nonce } : {}),
+        ...(raw.nonce_limit !== undefined ? { nonce_limit: raw.nonce_limit } : {})
+    };
 };
 
 export class StratumClient extends EventEmitter<{
@@ -78,7 +100,7 @@ export class StratumClient extends EventEmitter<{
                         if ((ws as any).session) parsed = decrypt((ws as any).session, parsed);
 
                         if (Array.isArray(parsed) && parsed[0] === "job")
-                            return this.emit("job", parsed[1]);
+                            return this.pushJob(parsed[1]);
 
                         if (Array.isArray(parsed) && this.promises.has(parsed[0])) {
                             const promise = this.promises.get(parsed[0])!;
@@ -142,7 +164,7 @@ export class StratumClient extends EventEmitter<{
                             const data = JSON.parse(trimmed);
 
                             if ("method" in data) {
-                                if (data.method === "job") this.emit("job", data.params);
+                                if (data.method === "job") this.pushJob(data.params);
                             } else if (this.promises.has(data.id)) {
                                 const promise = this.promises.get(data.id)!;
                                 clearTimeout(promise.timeout);
@@ -164,21 +186,64 @@ export class StratumClient extends EventEmitter<{
         };
     };
 
+    private pendingJob?: StratumJob;
+    private jobWaiters: Array<{ resolve: (job: StratumJob) => void, reject: (err: Error) => void, timeout: NodeJS.Timeout }> = [];
+
+    private pushJob(raw: any): void {
+        const job = NormalizeJob(raw);
+        if (!job) return;
+
+        this.pendingJob = job;
+
+        for (const waiter of this.jobWaiters.splice(0)) {
+            clearTimeout(waiter.timeout);
+            waiter.resolve(job);
+        };
+
+        this.emit("job", job);
+    };
+
+    private waitForJob(ms: number): Promise<StratumJob> {
+        if (this.pendingJob) return Promise.resolve(this.pendingJob);
+
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                this.jobWaiters = this.jobWaiters.filter(w => w.timeout !== timeout);
+                reject(new Error(`Pool accepted the login but sent no valid job within ${ms}ms.`));
+            }, ms);
+
+            this.jobWaiters.push({ resolve, reject, timeout });
+        });
+    };
+
     private closed: boolean = false;
     private handleClose() {
         if (this.closed) return;
         if (this.keepaliveInterval) clearInterval(this.keepaliveInterval);
 
         this.closed = true;
+
+        for (const waiter of this.jobWaiters.splice(0)) {
+            clearTimeout(waiter.timeout);
+            waiter.reject(new Error("Stratum connection closed before a job arrived."));
+        };
+
+        const pending = [...this.promises.values()];
+        this.promises.clear();
+
+        for (const promise of pending) {
+            clearTimeout(promise.timeout);
+            promise.reject(new Error("Stratum connection closed before the request completed."));
+        };
+
         this.emit("close");
     };
 
     public send(method: string, params: any): Promise<any> {
+        if (this.closed) return Promise.reject(new Error(`Cannot send "${method}": the stratum connection is closed.`));
+
         return new Promise((resolve, reject) => {
             const id = this.id++, timeout = setTimeout(() => {
-                if (this.closed)
-                    return this.promises.delete(id);
-
                 if (this.promises.has(id)) {
                     this.promises.delete(id);
                     reject(new Error("Stratum request timed out after 30000ms."));
@@ -196,12 +261,12 @@ export class StratumClient extends EventEmitter<{
 
     public async login(address: string, pass: string = "x", threads?: number): Promise<StratumJob> {
         /// @ts-ignore
-        const algorithms = ["rx/0", "rx/monero"], params: any = this.isWebSocket ? [address, pass, ...(threads ? [threads] : [])] : { pass, login: address, algo: algorithms, agent: `${process.isBun ? "bun" : "nodejs"} / v${version}`, extensions: ["nicehash", "keepalive"] };
+        const params: any = this.isWebSocket ? [address, pass, ...(threads ? [threads] : [])] : { pass, login: address, algo: ALGORITHMS, agent: `${process.isBun ? "bun" : "nodejs"} / v${version}`, extensions: ["nicehash", "keepalive"] };
 
         const result = await this.send("login", params);
 
-        this.session = result.id;
-        this.keepalive = this.isWebSocket || this.keepalive || (result.extensions && Array.isArray(result.extensions) && result.extensions.includes("keepalive"));
+        this.session = result?.id;
+        this.keepalive = this.isWebSocket || this.keepalive || (result?.extensions && Array.isArray(result.extensions) && result.extensions.includes("keepalive"));
 
         if (this.keepalive)
             this.keepaliveInterval = setInterval(async () => {
@@ -210,16 +275,7 @@ export class StratumClient extends EventEmitter<{
                 } catch (err: any) { if (err.message && err.message !== "Stratum request timed out after 30000ms.") this.close(); };
             }, 60000);
 
-        const job: StratumJob = {
-            blob: result.job.blob,
-            job_id: result.job.job_id,
-            target: result.job.target,
-            seed_hash: result.job.seed_hash,
-            ...(result.job.algo !== undefined ? { algo: result.job.algo } : {}),
-            ...(result.job.height !== undefined ? { height: result.job.height } : {}),
-            ...(result.job.start_nonce !== undefined ? { start_nonce: result.job.start_nonce } : {}),
-            ...(result.job.nonce_limit !== undefined ? { nonce_limit: result.job.nonce_limit } : {})
-        };
+        const job = this.pendingJob ?? NormalizeJob(result?.job) ?? await this.waitForJob(30000);
 
         this.emit("connect", this.remoteAddress);
         return job;
@@ -232,10 +288,7 @@ export class StratumClient extends EventEmitter<{
     };
 
     public close() {
-        if (this.closed) return;
-        if (this.keepaliveInterval) clearInterval(this.keepaliveInterval);
-
-        this.closed = true;
+        this.handleClose();
 
         if (this.isWebSocket)
             (this.socket as WebSocket).close();
@@ -248,8 +301,17 @@ export class StratumClient extends EventEmitter<{
     };
 };
 
-async function Tcp(protocol: string, host: string, port: number, agent?: string): Promise<{ socket: net.Socket, remoteAddress: string }> {
+function TuneSocket(socket: net.Socket): net.Socket {
+    socket.setNoDelay(true);
+    socket.setKeepAlive(true, 30000);
+
+    return socket;
+};
+
+async function Tcp(protocol: string, host: string, port: number, agent?: string, strictTls?: boolean): Promise<{ socket: net.Socket, remoteAddress: string }> {
     const remoteAddress = await ResolveHostname(host), socket: net.Socket = await new Promise<net.Socket>(async (resolve, reject) => {
+        const fail = (err: Error) => { InvalidateHostname(host); reject(err); };
+
         try {
             if (agent) {
                 const url = new URL(agent);
@@ -268,14 +330,14 @@ async function Tcp(protocol: string, host: string, port: number, agent?: string)
                     }
                 });
 
-                return resolve(client.socket);
+                return resolve(TuneSocket(client.socket));
             } else {
                 let resolved = false;
                 const socket = net.createConnection({ host: remoteAddress, port })
                     .once("error", (err) => {
                         if (!resolved) {
                             resolved = true;
-                            reject(new Error(`Connection refused: unable to establish TCP connection to ${host} (${err.message}).`));
+                            fail(new Error(`Connection refused: unable to establish TCP connection to ${host} (${err.message}).`));
                         };
                     });
 
@@ -283,17 +345,17 @@ async function Tcp(protocol: string, host: string, port: number, agent?: string)
                     if (!resolved) {
                         resolved = true;
                         socket.destroy();
-                        reject(new Error(`Connection timeout: failed to connect to ${host} within 10000ms.`));
+                        fail(new Error(`Connection timeout: failed to connect to ${host} within 10000ms.`));
                     }
                 }, 10000);
 
                 socket.on("connect", () => {
                     resolved = true;
-                    resolve(socket);
+                    resolve(TuneSocket(socket));
                     clearTimeout(timeout);
                 });
             };
-        } catch (err: any) { reject(new Error(`Proxy connection error: failed to establish tunnel via ${agent} (${err?.message || 'unknown error'}).`)); };
+        } catch (err: any) { fail(new Error(`Proxy connection error: failed to establish tunnel via ${agent} (${err?.message || 'unknown error'}).`)); };
     });
 
     if (protocol === "stratum+ssl:")
@@ -305,7 +367,7 @@ async function Tcp(protocol: string, host: string, port: number, agent?: string)
                     resolved = true; cb(socket);
                 };
 
-                const tlsSocket = tls.connect({ socket, servername: host, rejectUnauthorized: false }, () => {
+                const tlsSocket = tls.connect({ socket, servername: host, rejectUnauthorized: strictTls === true }, () => {
                     resolve(tlsSocket);
                 });
 
@@ -333,14 +395,28 @@ async function Wss(url: string, agent?: string): Promise<{ socket: WebSocket, re
 
         const socket = new WebSocket(url, { headers: { "x-salt": publicSalt }, lookup: (hostname, options, callback) => callback(null, remoteAddress, 4), ...(typeof agent === "string" ? { agent: new ((await import("proxy-agent")).ProxyAgent)(agent as any) } : {}) });
 
+        const timeout = setTimeout(() => {
+            if (resolved) return;
+
+            resolved = true;
+            socket.terminate();
+
+            InvalidateHostname(u.hostname);
+            reject(new Error(`WebSocket connection timeout: failed to connect to ${u.host} within 15000ms.`));
+        }, 15000);
+
         socket.on("open", () => {
             resolved = true;
+            clearTimeout(timeout);
             resolve({ socket, remoteAddress });
         });
 
         socket.on("error", (err) => {
             if (!resolved) {
                 resolved = true;
+                clearTimeout(timeout);
+
+                InvalidateHostname(u.hostname);
                 reject(new Error(`WebSocket connection failed: unable to connect to ${u.host} (${err.message}).`));
             };
         });
@@ -354,11 +430,11 @@ async function Wss(url: string, agent?: string): Promise<{ socket: WebSocket, re
     });
 };
 
-export async function connect(url: string, agent?: string, keepalive?: boolean): Promise<StratumClient> {
+export async function connect(url: string, agent?: string, keepalive?: boolean, strictTls?: boolean): Promise<StratumClient> {
     const u = new URL(url), isWebSocket = ["ws:", "wss:"].includes(u.protocol), connection: {
         socket: net.Socket | WebSocket,
         remoteAddress: string
-    } = isWebSocket ? await Wss(url, agent) : await Tcp(u.protocol, u.hostname, parseInt(u.port) || 3333, agent);
+    } = isWebSocket ? await Wss(url, agent) : await Tcp(u.protocol, u.hostname, parseInt(u.port) || 3333, agent, strictTls);
 
     return new StratumClient(isWebSocket, isWebSocket ? u.hostname : u.host, connection.remoteAddress, connection.socket, keepalive);
 };
