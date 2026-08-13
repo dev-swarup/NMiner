@@ -1,12 +1,14 @@
 import os from "os";
-import * as logger from "./src/js/logger.js";
+import { Level, Logger, Sink, createLogger, ms } from "./src/js/logger.js";
 
 import { Rx, RxJob, RxVariant, JobResult } from "./src/js/miner.js";
 import { PrintTopology, MaxThreads, getNumaNodes } from "./src/js/topology.js";
 import { connect, ALGORITHMS, StratumClient, StratumJob } from "./src/js/connect.js";
 
+export type { Level, Logger, Sink, Entry } from "./src/js/logger.js";
+
 const PrintDiff = (i: number) => i >= 100000000 ? `${Math.round(i / 1000000)}M` : i;
-const PrintHashes = (i: number) => i > 1000 ? ((i / 1000).toFixed(2) + " kH/s") : (i + " H/s");
+const PrintHashes = (i: number) => i > 1000 ? `${(i / 1000).toFixed(2)}kH/s` : `${i.toFixed(2)}H/s`;
 
 const DistributeThreads = (total: number, numa: number): number[] => {
     const base = Math.floor(total / numa);
@@ -20,11 +22,13 @@ export interface MinerOptions {
 
     proxy?: string;
     threads?: number;
-    logging?: boolean;
     throttle?: boolean;
     nicehash?: boolean;
     keepalive?: boolean;
     strictTls?: boolean;
+
+    logger?: Logger | Sink;
+    logging?: boolean | Level;
 };
 
 export class NMiner {
@@ -33,6 +37,11 @@ export class NMiner {
     private pass: string = "x";
     private options: Partial<MinerOptions> = { mode: "FAST", algo: "rx/0", logging: true };
     private stratum?: StratumClient;
+
+    private log!: Logger;
+    private cpu!: Logger;
+    private net!: Logger;
+    private dataset!: Logger;
 
     private rx: Rx = null as any;
     private rx_job: RxJob = null as any;
@@ -76,7 +85,9 @@ export class NMiner {
 
                         if (chunk && chunk.start_nonce != null)
                             this.rx_job.queue_range(chunk.start_nonce, chunk.nonce_limit ?? 0xFFFFFFFF);
-                        else
+                        else if (chunk && typeof chunk.retry_after === "number")
+                            this.chunk_backoff = Date.now() + Math.min(30000, Math.max(250, chunk.retry_after));
+                        else if (!chunk || !(chunk.migrated || chunk.job_expired))
                             this.chunk_backoff = Date.now() + 5000;
                     } catch { this.chunk_backoff = Date.now() + 5000; } finally { this.requesting_chunk = false; };
                 };
@@ -123,47 +134,46 @@ export class NMiner {
         const opts = typeof passOrOptions === "object" ? passOrOptions : options;
         if (opts) this.options = { ...this.options, ...opts };
 
+        this.log = createLogger(this.options);
+        this.cpu = this.log.child("cpu");
+        this.net = this.log.child("net");
+        this.dataset = this.log.child("randomx");
+
         this.rx = new Rx(this.options.algo as RxVariant, this.options.mode as any);
         this.rx_job = new RxJob(this.rx, async (nonce: Buffer, result: Buffer, version: number) => {
             const time = Date.now();
             const job = this.m_versions.get(version);
 
-            if (!job) {
-                if (this.options.logging) logger.Print(logger.CYAN_BG(" cpu     "), logger.GRAY("dropped a share mined against an expired job"));
-                return;
-            };
+            if (!job) return void this.cpu.debug("share dropped, job expired", { version });
 
             if (this.stratum)
                 try {
                     await this.stratum.submit(job.job_id, nonce.toString("hex"), result.toString("hex"));
 
                     this.accepted++;
-                    logger.Print(logger.CYAN_BG(" cpu     "), `${logger.GREEN("accepted")} (${this.accepted}/${(this.rejected > 0 ? logger.RED : logger.WHITE)(String(this.rejected))}) diff ${logger.WHITE_BOLD(String(job.diff))} ${logger.GetTime(time)}`);
+                    this.cpu.success("accepted", { accepted: this.accepted, rejected: this.rejected, diff: job.diff, took: ms(time) });
                 } catch (err) {
-                    const msg = err instanceof Error ? err.message : String(err);
-
                     this.rejected++;
-                    logger.Print(logger.CYAN_BG(" cpu     "), `${logger.RED("rejected")} (${this.accepted}/${logger.RED(String(this.rejected))}) ${logger.RED(msg)}`);
+                    this.cpu.warn("rejected", { accepted: this.accepted, rejected: this.rejected, reason: err instanceof Error ? err.message : String(err), took: ms(time) });
                 };
         });
 
         const m_this = this;
-        PrintTopology().then(() => { m_this.reconnect(); });
+        PrintTopology(this.log).then(() => { m_this.reconnect(); });
 
-        if (this.options.logging) {
+        if (this.cpu.enabled) {
             let last_hashes = 0;
 
             setInterval(() => {
-                if (this.stratum && this.options.logging) {
-                    const current_hashes = this.rx_job.get_hashes();
+                if (!this.stratum) return;
 
-                    if (current_hashes > 0) {
-                        const diff = (current_hashes - last_hashes) / 60;
-                        last_hashes = current_hashes;
+                const current_hashes = this.rx_job.get_hashes();
+                if (current_hashes <= 0) return;
 
-                        logger.Print(logger.CYAN_BG(" cpu     "), `speed ${logger.CYAN_BG(" cpu ")} ${PrintHashes(diff)}`);
-                    };
-                };
+                const diff = (current_hashes - last_hashes) / 60;
+                last_hashes = current_hashes;
+
+                this.cpu.info("speed", { "60s": PrintHashes(diff), hashes: current_hashes, threads: this.m_threads?.reduce((total, count) => total + count, 0) });
             }, 60000);
         };
 
@@ -191,7 +201,7 @@ export class NMiner {
         const delay = Math.round(this.retry_delay * (0.8 + Math.random() * 0.4));
         this.retry_delay = Math.min(this.retry_delay * 2, 300000);
 
-        if (this.options.logging) logger.Print(logger.BLUE_BG(" net     "), `reconnecting in ${logger.WHITE_BOLD(String(Math.round(delay / 1000)))}s`);
+        this.net.warn("reconnecting", { retry: `${Math.round(delay / 1000)}s`, pool: this.pool });
         setTimeout(() => this.reconnect(), delay);
     };
 
@@ -199,7 +209,7 @@ export class NMiner {
         if (!job.algo) return true;
 
         if (!ALGORITHMS.includes(job.algo)) {
-            this.logger_error(new Error(`pool announced unsupported algorithm "${job.algo}" (this miner supports ${ALGORITHMS.join(", ")})`));
+            this.log.error(`pool announced an unsupported algorithm`, { algo: job.algo, supported: ALGORITHMS.join(",") });
             return false;
         };
 
@@ -210,7 +220,7 @@ export class NMiner {
     private async reconnect() {
         try {
             const stratum = this.stratum = await connect(this.pool, this.options?.proxy, this.options?.keepalive, this.options?.strictTls);
-            if (this.options.logging) logger.Print(logger.BLUE_BG(" net     "), `use pool ${logger.CYAN(`${stratum.host}`)} ${logger.GRAY(stratum.remoteAddress)}`);
+            this.net.info("connected", { pool: stratum.host, ip: stratum.remoteAddress, proxy: this.options.proxy });
 
             const numa = getNumaNodes();
             const max_threads = await MaxThreads();
@@ -243,7 +253,7 @@ export class NMiner {
                 this.retry_delay = 5000;
             };
         } catch (err) {
-            this.logger_error(err);
+            this.log.error(err);
 
             if (this.stratum)
                 this.stratum.close();
@@ -270,18 +280,20 @@ export class NMiner {
                     this.rx_job.stop();
 
                     const start = Date.now();
-                    this.logger_dataset_init(job.seed_hash);
+                    this.dataset.info("dataset init", { mode: this.options.mode, algo: this.options.algo, seed: job.seed_hash.substring(0, 16), threads: os.cpus().length });
 
                     if (await this.rx.reallocate(Buffer.from(job.seed_hash, "hex"), this.options.algo))
-                        this.logger_dataset_ready(Date.now() - start);
+                        this.dataset.success("dataset ready", { took: ms(start) });
 
                     const numa = getNumaNodes();
                     const used_threads = this.options.threads || await MaxThreads();
 
                     this.m_threads = DistributeThreads(used_threads, numa);
                     this.rx_job.start(this.m_threads);
+
+                    this.cpu.debug("mining", { threads: used_threads, numa, split: this.m_threads.join("/") });
                 } catch (err) {
-                    this.logger_error(err);
+                    this.log.error(err);
                     if (this.stratum) this.stratum.close();
 
                     return false;
@@ -292,7 +304,7 @@ export class NMiner {
 
             const result = start_nonce != null ? this.rx_job.send_job(Buffer.from(job.blob, "hex"), Buffer.from(job.target, "hex"), this.options.nicehash ?? false, reset_nonce, start_nonce, nonce_limit) : this.rx_job.send_job(Buffer.from(job.blob, "hex"), Buffer.from(job.target, "hex"), this.options.nicehash ?? false, reset_nonce);
 
-            this.logger_new_job(result.diff, job.height, result.txnCount);
+            this.net.info("new job", { from: this.stratum?.host, diff: PrintDiff(result.diff), algo: this.options.algo, height: job.height, tx: result.txnCount || undefined });
 
             this.track_version(result, job.job_id);
             this.m_job = Object.assign({} as any, job, result);
@@ -310,22 +322,202 @@ export class NMiner {
         return this.rx_job.throttle(threads, ms);
     };
 
-    private logger_dataset_init(seed_hash: string) {
-        if (this.options.logging) logger.Print(logger.CYAN_BG(" randomx "), `${logger.MAGENTA("init dataset")} algo ${logger.WHITE_BOLD(this.options.algo as string)} (${logger.WHITE_BOLD(String(os.cpus().length))} threads) seed ${logger.WHITE_BOLD(seed_hash.substring(0, 16) + "...")}`);
+};
+
+import { EventEmitter } from "./src/js/utils.js";
+import { Edge, UdpRouter } from "./src/js/edge.js";
+import { Fleet, FleetChild, autoWorkers, foreignCluster } from "./src/js/fleet.js";
+import { Backend, Credentials, LocalBackend, PrimaryHub, ShareReport } from "./src/js/hub.js";
+
+export type LoginContext = {
+    pass: string;
+    reject?: string;
+    address: string;
+    override?: Partial<MinerOptions & { pool: string, address: string, pass: string }>;
+};
+
+export interface ProxyOptions extends MinerOptions {
+    port?: number;
+    udpPort?: number;
+    maxLinks?: number;
+    cluster?: boolean | number;
+    expandNicehash?: boolean;
+
+    verify?: boolean;
+    verifyMode?: mode;
+    verifyThreads?: number;
+
+    authorize?: (username: string, password: string) => boolean | Promise<boolean>;
+};
+
+export class NMinerProxy extends EventEmitter<{
+    share: [address: string, target: string, height?: number];
+    work: [address: string, difficulty: number, forwarded: boolean, solved: number];
+}> {
+    private pool: string;
+    private pass: string;
+    private address: string;
+    private options: ProxyOptions;
+
+    private log: Logger;
+    private share: Logger;
+
+    private hub?: PrimaryHub;
+    private local?: LocalBackend;
+    private backend!: Backend;
+
+    private edge?: Edge;
+    private fleet?: Fleet;
+    private udp?: UdpRouter;
+    private idle: boolean = false;
+
+    private work: number = 0;
+    private solved: number = 0;
+    private accepted: number = 0;
+    private rejected: number = 0;
+    private absorbed: number = 0;
+
+    constructor(pool?: string, address?: string, options?: ProxyOptions);
+    constructor(pool?: string, address?: string, pass?: string, options?: ProxyOptions);
+    constructor(pool?: string, address?: string, passOrOptions?: string | ProxyOptions, options?: ProxyOptions) {
+        super();
+
+        this.pool = pool || "stratum+tcp://pool.supportxmr.com:3333";
+        this.address = address || "49ofeDTjSQXJQDUaaFYZm4fF7zG7v1GN5LkJKLj1vkH5FXh2ipReU3SMkSB4ERTAeiiQpYragiKmS8VY5KmRXxqkSfNH73T";
+        this.pass = typeof passOrOptions === "string" ? passOrOptions : "x";
+
+        this.options = { port: 8080, logging: true, mode: "FAST", algo: "rx/0" };
+
+        const opts = typeof passOrOptions === "object" ? passOrOptions : options;
+        if (opts) this.options = { ...this.options, ...opts };
+
+        this.log = createLogger(this.options, "proxy");
+        this.share = this.log.child("share");
+
+        const foreign = foreignCluster();
+
+        if (foreign && foreign.index > 0) {
+            this.idle = true;
+            this.log.warn(`idle, NMiner clusters itself so upstream stays on one process — run a single instance (pm2: exec_mode "fork" or instances 1)`, { manager: foreign.manager, instance: foreign.index });
+
+            return;
+        };
+
+        if (foreign) this.log.warn("foreign process manager detected, NMiner manages its own workers — keep instances at 1", { manager: foreign.manager });
+
+        this.local = this.create_backend();
+        this.backend = this.local;
+
+        const workers = this.worker_count();
+
+        if (workers > 0) {
+            this.hub = new PrimaryHub(this.local);
+            this.fleet = new Fleet(workers, this.log, (child, raw) => this.route(child, raw), child => { this.hub!.evict(child.id); this.udp?.evict(child.id); });
+            this.fleet.listen(this.options.port ?? 8080);
+
+            if (this.options.udpPort) {
+                this.udp = new UdpRouter(this.options.udpPort, { log: this.log }, () => this.fleet!.all());
+                this.udp.listen();
+            };
+
+            return;
+        };
+
+        this.edge = new Edge(this.backend, { port: this.options.port, log: this.log });
+        this.edge.listen();
+
+        if (this.options.udpPort) {
+            this.udp = new UdpRouter(this.options.udpPort, { log: this.log }, undefined, this.backend);
+            this.udp.listen();
+        };
     };
 
-    private logger_dataset_ready(time: number) {
-        if (this.options.logging) logger.Print(logger.CYAN_BG(" randomx "), `${logger.GREEN("dataset ready")} ${logger.GRAY(`(${time} ms)`)}`);
+    private route(child: FleetChild, raw: any): void {
+        if (raw.t === "u") return this.udp?.write(raw.k, raw.d);
+        if (raw.t === "ux") return this.udp?.forget(raw.k);
+
+        this.hub!.message(child, raw);
     };
 
-    private logger_new_job(diff: number, height?: number, txnCount?: number) {
-        if (this.options.logging) logger.Print(logger.BLUE_BG(" net     "), `${logger.MAGENTA("new job")} from ${this.stratum?.host} diff ${logger.WHITE_BOLD(PrintDiff(diff) as string)} algo ${logger.WHITE_BOLD(this.options.algo as string)}` + `${height ? ` height ${logger.WHITE_BOLD(height as any)}` : ""}` + `${txnCount && txnCount > 0 ? ` (${txnCount} tx)` : ""}`);
+    public stats() {
+        return {
+            work: this.work,
+            idle: this.idle,
+            solved: this.solved,
+            accepted: this.accepted,
+            rejected: this.rejected,
+            absorbed: this.absorbed,
+            verifying: this.local?.verifying ?? false,
+            workers: this.fleet?.stats() ?? [], miners: this.local?.accounting() ?? [],
+            pools: (this.local?.pools ?? []).map(upstream => ({ pool: upstream.pool, miners: upstream.size, links: upstream.stats() }))
+        };
     };
 
-    private logger_error(err: any) {
-        if (!this.options.logging) return;
+    public switch_pool(config: { pool: string, address: string, pass: string, proxy?: string }): void {
+        this.pool = config.pool;
+        this.pass = config.pass;
+        this.address = config.address;
 
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.Print(logger.MAGENTA_BG(" program "), logger.RED(`error: ${msg}`));
+        if (config.proxy !== undefined) this.options.proxy = config.proxy;
+
+        this.log.info("switching pool", { pool: config.pool, proxy: this.options.proxy });
+        this.local?.reset("Proxy switched pools, reconnect.");
+    };
+
+    public close(): void {
+        this.log.info("shutting down", { accepted: this.accepted, rejected: this.rejected, absorbed: this.absorbed, solved: PrintDiff(this.solved) });
+
+        this.edge?.close();
+        this.udp?.close();
+        this.fleet?.stop();
+        this.local?.shutdown();
+    };
+
+    private worker_count(): number {
+        const setting = this.options.cluster;
+
+        if (setting === false) return 0;
+        if (setting === undefined || setting === true) return autoWorkers();
+
+        return Number.isFinite(setting) && (setting as number) > 0 ? Math.floor(setting as number) : 0;
+    };
+
+    private create_backend(): LocalBackend {
+        const resolve = async (address: string, pass: string): Promise<Credentials> => {
+            if (this.options.authorize && !(await this.options.authorize(address, pass)))
+                throw new Error("Unauthorized");
+
+            return { pool: this.pool, address: this.address, pass: this.pass, proxy: this.options.proxy };
+        };
+
+        const sink = (share: ShareReport) => {
+            this.emit("work", share.address, share.difficulty, share.forwarded, share.solved);
+            if (share.accepted) this.work += share.difficulty;
+
+            if (!share.forwarded) {
+                this.absorbed++;
+                return void this.share.debug("absorbed", { diff: share.difficulty, actual: PrintDiff(share.actual), absorbed: this.absorbed, took: ms(share.elapsed) });
+            };
+
+            if (share.accepted) {
+                this.accepted++;
+                this.solved += share.solved;
+
+                this.emit("share", share.address, share.target, share.height);
+                this.share.success("accepted", { accepted: this.accepted, rejected: this.rejected, diff: share.difficulty, solved: PrintDiff(share.solved), total: PrintDiff(this.solved), took: ms(share.elapsed) });
+            } else {
+                this.rejected++;
+                this.share.warn("rejected", { accepted: this.accepted, rejected: this.rejected, diff: share.difficulty, took: ms(share.elapsed) });
+            };
+        };
+
+        return new LocalBackend(resolve, sink, {
+            log: this.log,
+            proxy: this.options.proxy,
+            maxLinks: this.options.maxLinks,
+            keepalive: this.options.keepalive,
+            strictTls: this.options.strictTls,
+            expandNicehash: this.options.expandNicehash
+        }, this.options.verify === false ? false : { mode: this.options.verifyMode ?? "FAST", algo: this.options.algo, threads: this.options.verifyThreads, log: this.log });
     };
 };

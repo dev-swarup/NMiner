@@ -6,6 +6,7 @@
 
 #include "randomx/rx.h"
 #include "randomx/rx_job.h"
+#include "randomx/rx_verify.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -287,6 +288,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports)
 {
     Rx::Init(env, exports);
     RxJob::Init(env, exports);
+    RxVerify::Init(env, exports);
 
     exports.Set("hugePages", Napi::Function::New(env, HugePages));
     exports.Set("numaNodes", Napi::Function::New(env, GetNumaNodes));
