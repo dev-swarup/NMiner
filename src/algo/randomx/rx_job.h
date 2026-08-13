@@ -20,6 +20,7 @@
 
 #include "rx.h"
 
+static constexpr size_t kCacheLine = 64;
 static constexpr size_t kNonceOffset = 39;
 static constexpr size_t kMaxBlobSize = 408;
 static constexpr uint32_t kNicehashMask = 0xFF000000u;
@@ -115,14 +116,14 @@ private:
     std::condition_variable m_cv;
 
     std::mutex m_job_mutex;
-    std::atomic<uint32_t> m_job_version{0};
-    std::atomic<uint64_t> m_hashes_done{0};
+    alignas(kCacheLine) std::atomic<uint32_t> m_job_version{0};
+    alignas(kCacheLine) std::atomic<uint64_t> m_hashes_done{0};
 
     std::mutex m_range_mutex;
     std::deque<NonceRange> m_queued;
-    std::atomic<uint64_t> m_range{pack_range(0, 0xFFFFFFFFu)};
+    alignas(kCacheLine) std::atomic<uint64_t> m_range{pack_range(0, 0xFFFFFFFFu)};
 
-    std::atomic<uint32_t> m_throttle_ms{0};
+    alignas(kCacheLine) std::atomic<uint32_t> m_throttle_ms{0};
     std::atomic<uint32_t> m_throttle_count{0};
 
     alignas(16) uint8_t m_blob[kMaxBlobSize]{};

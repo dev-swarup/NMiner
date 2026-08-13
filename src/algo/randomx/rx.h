@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <cstring>
 #include <cstdint>
 
 #include <napi.h>
@@ -34,6 +35,23 @@ inline std::vector<uint32_t> ParseThreads(Napi::Value val)
         threads.push_back(arr.Get(i).As<Napi::Number>().Uint32Value());
 
     return threads;
+};
+
+inline uint64_t ParseTarget(const std::vector<uint8_t> &target)
+{
+    uint64_t value = 0;
+
+    if (target.size() >= 8)
+        std::memcpy(&value, target.data(), sizeof(value));
+    else if (target.size() >= 4)
+    {
+        uint32_t compact = 0;
+        std::memcpy(&compact, target.data(), sizeof(compact));
+
+        if (compact) value = 0xFFFFFFFFFFFFFFFFULL / (0xFFFFFFFFULL / uint64_t(compact));
+    };
+
+    return value;
 };
 
 enum class RxAlgoVersion : uint8_t

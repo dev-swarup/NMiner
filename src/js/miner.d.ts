@@ -48,6 +48,19 @@ export class RxJob {
     public send_job(blob: Buffer, diff: Buffer, nicehash: boolean, reset_nonce: boolean, start_nonce?: number, nonce_limit?: number): JobResult;
 }
 
+export const VERIFY_MATCHED: 1;
+export const VERIFY_SKIPPED: 8;
+export const VERIFY_POOL_TARGET: 4;
+export const VERIFY_MINER_TARGET: 2;
+
+export class RxVerify {
+    constructor(rx: Rx, threads?: number);
+
+    public stop(): void;
+    public pending(): number;
+    public verify(blob: Buffer, nonce: Buffer, result: Buffer, miner_target: Buffer, pool_target: Buffer): Promise<number>;
+}
+
 export function numaNodes(): number;
 export function hugePages(pages?: number): number;
 
