@@ -88,6 +88,12 @@ private:
         uint32_t numa_node;
     };
 
+    struct LiveGuard
+    {
+        RxJob *job;
+        ~LiveGuard();
+    };
+
     std::vector<ThreadSlot> PlanThreads(std::vector<uint32_t> counts);
     void BindThread(uint32_t core_id);
 

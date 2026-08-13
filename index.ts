@@ -364,13 +364,6 @@ import { Edge, UdpRouter } from "./src/js/edge.js";
 import { Fleet, FleetChild, autoWorkers, foreignCluster } from "./src/js/fleet.js";
 import { Backend, Credentials, LocalBackend, PrimaryHub, ShareReport } from "./src/js/hub.js";
 
-export type LoginContext = {
-    pass: string;
-    reject?: string;
-    address: string;
-    override?: Partial<MinerOptions & { pool: string, address: string, pass: string }>;
-};
-
 export interface ProxyOptions extends MinerOptions {
     port?: number;
     udpPort?: number;

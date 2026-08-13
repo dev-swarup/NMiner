@@ -3,13 +3,13 @@
 
 #include "rx_job.h"
 
-namespace
+RxJob::LiveGuard::~LiveGuard()
 {
-    struct LiveGuard
-    {
-        std::atomic<uint32_t> &count;
-        ~LiveGuard() { count.fetch_sub(1, std::memory_order_relaxed); };
-    };
+    if (job->m_live.fetch_sub(1, std::memory_order_acq_rel) != 1) return;
+    if (!job->m_active.exchange(false, std::memory_order_relaxed)) return;
+
+    RxJob *self = job;
+    self->tsfn.NonBlockingCall([self](Napi::Env env, Napi::Function) { self->tsfn.Unref(env); });
 };
 
 static uint32_t read_txn_count(const uint8_t *blob, size_t size)
@@ -243,18 +243,15 @@ Napi::Value RxJob::Start(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
 
-    if (m_active.load(std::memory_order_relaxed))
+    if (m_active.load(std::memory_order_relaxed) && m_live.load(std::memory_order_relaxed) > 0)
     {
-        if (m_live.load(std::memory_order_relaxed) > 0)
-        {
-            if (m_paused.exchange(false, std::memory_order_relaxed))
-                Wake();
+        if (m_paused.exchange(false, std::memory_order_relaxed))
+            Wake();
 
-            return env.Undefined();
-        };
-
-        StopLoop();
+        return env.Undefined();
     };
+
+    StopLoop();
 
     std::vector<uint32_t> counts;
     if (info.Length() > 0) counts = ParseThreads(info[0]);
@@ -266,12 +263,10 @@ Napi::Value RxJob::Start(const Napi::CallbackInfo &info)
     m_paused.store(false, std::memory_order_relaxed);
 
     tsfn.Ref(env);
+    m_live.fetch_add(static_cast<uint32_t>(slots.size()), std::memory_order_relaxed);
 
     for (const ThreadSlot &slot : slots)
-    {
-        m_live.fetch_add(1, std::memory_order_relaxed);
         m_threads.emplace_back(&RxJob::Loop, this, slot.core_id, slot.numa_node);
-    };
 
     return env.Undefined();
 };
@@ -530,7 +525,7 @@ void RxJob::ApplyThrottle()
 
 void RxJob::Loop(uint32_t core_id, uint32_t numa_node)
 {
-    LiveGuard live{m_live};
+    LiveGuard live{this};
     BindThread(core_id);
 
     std::shared_ptr<RxVm> vm = AcquireVm(numa_node);

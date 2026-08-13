@@ -109,17 +109,20 @@ export class Upstream {
     public async attach(client: UpstreamClient): Promise<StratumJob & Grant> {
         this.live.add(client);
 
-        const link = await this.pick(client);
-        if (!this.live.has(client)) throw new Error("Miner detached before it was housed.");
+        try {
+            const link = await this.pick(client);
+            if (!this.live.has(client)) throw new Error("Miner detached before it was housed.");
 
-        this.house(link, client);
+            this.house(link, client);
 
-        const grant = this.grant(link, client); if (!grant) {
-            this.evict(client);
-            throw new Error("Upstream nonce space is exhausted.");
+            const grant = this.grant(link, client);
+            if (!grant) throw new Error("Upstream nonce space is exhausted.");
+
+            return this.payload(link, client, grant);
+        } catch (err) {
+            this.detach(client);
+            throw err;
         };
-
-        return this.payload(link, client, grant);
     };
 
     public detach(client: UpstreamClient): void {
@@ -310,9 +313,16 @@ export class Upstream {
             socket.on("job", job => this.accept(link, job));
             socket.on("close", () => this.sever(link));
 
-            const job = await socket.login(this.address, this.pass);
-            link.socket = socket;
+            let job: StratumJob; try {
+                job = await socket.login(this.address, this.pass);
+            } catch (err) {
+                socket.removeAllListeners("close");
+                socket.close();
 
+                throw err;
+            };
+
+            link.socket = socket;
             if (!link.job) this.accept(link, job);
             this.log.info("link up", { host: socket.host, links: this.links.length, slot: link.slot > 0 ? `0x${link.slot.toString(16).padStart(2, "0")}` : undefined });
         })().finally(() => { link.connecting = null; });

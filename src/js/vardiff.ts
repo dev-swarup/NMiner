@@ -41,15 +41,12 @@ export function hashValue(result: string): bigint | null {
     return hash.length === 32 ? hash.readBigUInt64LE(24) : null;
 };
 
-export function meetsTarget(result: string, target: string): boolean {
-    const value = hashValue(result);
+export function meetsValue(value: bigint | null, target: string): boolean {
     return value !== null && value <= targetValue(target);
 };
 
-export function shareDifficulty(result: string): number {
-    const value = hashValue(result);
+export function valueDifficulty(value: bigint | null): number {
     if (value === null) return 0;
-
     return value > 0n ? Number(U64 / value) : Number.MAX_SAFE_INTEGER;
 };
 

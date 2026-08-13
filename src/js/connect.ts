@@ -392,6 +392,10 @@ async function Tcp(protocol: string, host: string, port: number, agent?: string,
                 tlsSocket.once("error", (err) => {
                     if (!resolved) {
                         resolved = true;
+
+                        tlsSocket.destroy();
+                        socket.destroy();
+
                         reject(new Error(`TLS handshake failed: unable to establish secure connection to ${host} (${err.message}).`));
                     };
                 });

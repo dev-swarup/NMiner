@@ -1,7 +1,7 @@
 import { StratumJob } from "./connect.js";
 import { Logger, asLogger } from "./logger.js";
 import { Channel, workerLink } from "./fleet.js";
-import { VarDiff, meetsTarget, shareDifficulty, targetDifficulty } from "./vardiff.js";
+import { VarDiff, hashValue, meetsValue, valueDifficulty, targetDifficulty } from "./vardiff.js";
 import { Verifier, VerifierOptions, VERIFY_MATCHED, VERIFY_SKIPPED } from "./verifier.js";
 import { Upstream, UpstreamClient, UpstreamOptions, UpstreamRegistry } from "./upstream.js";
 
@@ -84,12 +84,18 @@ export class LocalBackend implements Backend {
             target: pool => vardiff.tune(pool)
         };
 
-        this.entries.set(session, { client, upstream, address, vardiff });
+        const entry: Entry = { client, upstream, address, vardiff };
+        this.entries.set(session, entry);
 
         try {
-            return await upstream.attach(client);
+            const job = await upstream.attach(client);
+
+            if (this.entries.get(session) !== entry) throw new Error("Superseded by a newer login.");
+            return job;
         } catch (err) {
-            this.entries.delete(session);
+            if (this.entries.get(session) === entry) this.entries.delete(session);
+
+            upstream.detach(client);
             throw err;
         };
     };
@@ -119,21 +125,21 @@ export class LocalBackend implements Backend {
 
         if (!entry.upstream.owns(entry.client, claimed.readUInt32LE(0))) deny("Nonce outside your assigned range.");
 
-        const issue = entry.vardiff.floor();
+        const issue = entry.vardiff.floor(), value = hashValue(result);
 
         const flags = this.verifier ? await this.verifier.check(job.blob, nonce, result, issue.target, job.target, job.seed_hash) : VERIFY_SKIPPED;
         if (!(flags & VERIFY_SKIPPED) && !(flags & VERIFY_MATCHED)) deny("Share does not hash to the submitted result.");
 
-        if (!meetsTarget(result, issue.target)) deny("Share is below your assigned difficulty.");
+        if (!meetsValue(value, issue.target)) deny("Share is below your assigned difficulty.");
 
-        if (meetsTarget(result, entry.vardiff.target)) entry.vardiff.settle();
+        if (issue.target === entry.vardiff.target || meetsValue(value, entry.vardiff.target)) entry.vardiff.settle();
 
         entry.vardiff.submitted(issue.difficulty);
         entry.upstream.report(entry.client, entry.vardiff.hashrate);
 
-        const report = { address: entry.address, target: job.target, height: job.height, elapsed: started, difficulty: issue.difficulty, actual: shareDifficulty(result) };
+        const report = { address: entry.address, target: job.target, height: job.height, elapsed: started, difficulty: issue.difficulty, actual: valueDifficulty(value) };
 
-        if (!meetsTarget(result, job.target)) {
+        if (!meetsValue(value, job.target)) {
             this.sink({ ...report, accepted: true, forwarded: false, solved: 0 });
             return { status: "OK" };
         };
