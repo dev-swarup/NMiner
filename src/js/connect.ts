@@ -6,6 +6,7 @@ import { SocksClient } from "socks";
 
 import { version } from "../../package.json";
 
+import { UdpClient } from "./udp.js";
 import { EventEmitter } from "./utils.js";
 import { hash, encrypt, decrypt, createExchange } from "./crypto.js";
 
@@ -101,6 +102,11 @@ export class StratumClient extends EventEmitter<{
 
                         if (Array.isArray(parsed) && parsed[0] === "job")
                             return this.pushJob(parsed[1]);
+
+                        if (Array.isArray(parsed) && parsed[0] === "error") {
+                            this.closeReason = String(parsed[1] ?? "");
+                            return ws.close();
+                        };
 
                         if (Array.isArray(parsed) && this.promises.has(parsed[0])) {
                             const promise = this.promises.get(parsed[0])!;
@@ -217,15 +223,18 @@ export class StratumClient extends EventEmitter<{
     };
 
     private closed: boolean = false;
+    private closeReason: string = "";
+
     private handleClose() {
         if (this.closed) return;
         if (this.keepaliveInterval) clearInterval(this.keepaliveInterval);
 
         this.closed = true;
+        const reason = this.closeReason ? ` (${this.closeReason})` : "";
 
         for (const waiter of this.jobWaiters.splice(0)) {
             clearTimeout(waiter.timeout);
-            waiter.reject(new Error("Stratum connection closed before a job arrived."));
+            waiter.reject(new Error(`Stratum connection closed before a job arrived, ${reason}.`));
         };
 
         const pending = [...this.promises.values()];
@@ -233,7 +242,7 @@ export class StratumClient extends EventEmitter<{
 
         for (const promise of pending) {
             clearTimeout(promise.timeout);
-            promise.reject(new Error("Stratum connection closed before the request completed."));
+            promise.reject(new Error(`Stratum connection closed before the request completed, ${reason}.`));
         };
 
         this.emit("close");
@@ -431,6 +440,15 @@ async function Wss(url: string, agent?: string): Promise<{ socket: WebSocket, re
 };
 
 export async function connect(url: string, agent?: string, keepalive?: boolean, strictTls?: boolean): Promise<StratumClient> {
+    if (new URL(url).protocol === "udp:") {
+        const u = new URL(url), remoteAddress = await ResolveHostname(u.hostname);
+
+        const socket = new UdpClient(remoteAddress, parseInt(u.port) || 8080);
+        await socket.connect();
+
+        return new StratumClient(true, u.hostname, remoteAddress, socket as any, keepalive);
+    };
+
     const u = new URL(url), isWebSocket = ["ws:", "wss:"].includes(u.protocol), connection: {
         socket: net.Socket | WebSocket,
         remoteAddress: string

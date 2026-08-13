@@ -21,7 +21,9 @@ export function getNumaNodes(): number {
     return _numa;
 };
 
-export async function PrintTopology(): Promise<void> {
+export async function PrintTopology(log?: logger.LogLike): Promise<void> {
+    if (log !== undefined && !logger.asLogger(log, "program").allows("info")) return;
+
     const topology: Array<[string, string | Array<string>]> = [];
     const [cpu, system, motherboard, mem, memLayout] = await Promise.all([getCpu(), si.system(), si.baseboard(), si.mem(), si.memLayout()]);
 

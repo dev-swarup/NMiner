@@ -21,7 +21,6 @@
     "dependencies": {
         "ws": "^8.21.0",
         "socks": "^2.8.9",
-        "colors": "^1.4.0",
         "cmake-js": "^8.0.0",
         "proxy-agent": "^8.0.2",
         "node-addon-api": "^8.9.0",
