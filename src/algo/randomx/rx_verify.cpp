@@ -28,14 +28,33 @@ RxVerify::RxVerify(const Napi::CallbackInfo &info) : Napi::ObjectWrap<RxVerify>(
 
     m_state->tsfn.Unref(env);
 
+    m_env = env;
+    napi_add_env_cleanup_hook(env, &RxVerify::CleanupTsfn, this);
+
     m_active.store(true, std::memory_order_relaxed);
     for (uint32_t i = 0; i < count; ++i) m_threads.emplace_back(&RxVerify::Loop, this, 0u);
 };
 
+void RxVerify::CleanupTsfn(void *arg)
+{
+    static_cast<RxVerify *>(arg)->ReleaseTsfn();
+};
+
+void RxVerify::ReleaseTsfn()
+{
+    if (m_released.exchange(true, std::memory_order_relaxed))
+        return;
+
+    StopLoop();
+    if (m_state && m_state->tsfn) m_state->tsfn.Abort();
+};
+
 RxVerify::~RxVerify()
 {
-    StopLoop();
-    m_state->tsfn.Release();
+    if (m_env && !m_released.load(std::memory_order_relaxed))
+        napi_remove_env_cleanup_hook(m_env, &RxVerify::CleanupTsfn, this);
+
+    ReleaseTsfn();
 };
 
 Napi::Object RxVerify::Init(Napi::Env env, Napi::Object exports)
@@ -62,7 +81,7 @@ Napi::Value RxVerify::Verify(const Napi::CallbackInfo &info)
         return deferred.Promise();
     };
 
-    const auto blob = ToVector(info[0].As<Napi::Buffer<uint8_t>>());
+    auto blob = ToVector(info[0].As<Napi::Buffer<uint8_t>>());
     const auto nonce = ToVector(info[1].As<Napi::Buffer<uint8_t>>());
     const auto result = ToVector(info[2].As<Napi::Buffer<uint8_t>>());
 
@@ -71,6 +90,8 @@ Napi::Value RxVerify::Verify(const Napi::CallbackInfo &info)
         deferred.Reject(Napi::Error::New(env, "Invalid blob, nonce or result length").Value());
         return deferred.Promise();
     };
+
+    if (blob.size() > kMaxBlobSize) blob.resize(kMaxBlobSize);
 
     Task *task = new Task { blob, {}, {}, ParseTarget(ToVector(info[3].As<Napi::Buffer<uint8_t>>())), ParseTarget(ToVector(info[4].As<Napi::Buffer<uint8_t>>())), 0u, m_state, deferred };
 
@@ -88,11 +109,11 @@ Napi::Value RxVerify::Verify(const Napi::CallbackInfo &info)
             return deferred.Promise();
         };
 
+        if (m_state->inflight.fetch_add(1, std::memory_order_relaxed) == 0)
+            m_state->tsfn.Ref(env);
+
         m_queue.push_back(task);
     };
-
-    if (m_state->inflight.fetch_add(1, std::memory_order_relaxed) == 0)
-        m_state->tsfn.Ref(env);
 
     m_cv.notify_one();
     return deferred.Promise();
@@ -172,22 +193,28 @@ void RxVerify::Loop(uint32_t numa_node)
             if (!m_active.load(std::memory_order_relaxed))
                 break;
 
-            if (m_queue.empty())
-                continue;
-
-            task = m_queue.front();
-            m_queue.pop_front();
+            if (!m_queue.empty())
+            {
+                task = m_queue.front();
+                m_queue.pop_front();
+            };
         };
 
         if (rx->updating.load(std::memory_order_acquire))
         {
             vm.reset();
 
-            task->flags = kVerifySkipped;
-            Settle(task);
+            if (task)
+            {
+                task->flags = kVerifySkipped;
+                Settle(task);
+            };
 
             continue;
         };
+
+        if (!task)
+            continue;
 
         if (!vm)
         {

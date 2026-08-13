@@ -55,12 +55,16 @@ private:
 
     void Loop(uint32_t numa_node);
     void StopLoop();
+    void ReleaseTsfn();
+    static void CleanupTsfn(void *arg);
 
     void Settle(Task *task);
 
     Rx *rx = nullptr;
+    napi_env m_env = nullptr;
     Napi::ObjectReference rx_ref;
     std::shared_ptr<State> m_state;
+    std::atomic<bool> m_released{false};
 
     std::mutex m_mutex;
     std::condition_variable m_cv;

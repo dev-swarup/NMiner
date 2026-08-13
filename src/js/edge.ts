@@ -132,8 +132,10 @@ export class Edge {
 interface Peer {
     key: string;
     seen: number;
+    salt: string;
     link: Datagram;
     secret: Buffer;
+    welcome: string;
     logged: boolean;
     session: Session;
 };
@@ -168,7 +170,9 @@ export class UdpEdge {
         peer.link.receive(text);
     };
 
-    public drop(key: string): void {
+    public drop(key: string): void { this.discard(key, true); };
+
+    private discard(key: string, notify: boolean): void {
         const peer = this.peers.get(key);
         if (!peer) return;
 
@@ -178,7 +182,7 @@ export class UdpEdge {
         this.backend.close(peer.session);
 
         this.log.debug("peer dropped", { session: peer.session.id, peer: key });
-        this.options.dropped?.(key);
+        if (notify) this.options.dropped?.(key);
     };
 
     public close(): void {
@@ -189,13 +193,18 @@ export class UdpEdge {
     private greet(key: string, salt: string): void {
         if (salt.length < 64) return;
 
+        const known = this.peers.get(key); if (known && known.salt === salt) {
+            known.seen = Date.now();
+            return this.write(key, WELCOME + known.welcome);
+        };
+
         let privateHash: string, secret: Buffer; try {
             ({ salt: privateHash, session: secret } = crypto.generateHandshake(Buffer.from(salt, "hex") as any));
         } catch { return; };
 
-        this.drop(key);
+        this.discard(key, false);
 
-        const peer: Peer = { key, secret, logged: false, seen: Date.now() } as Peer;
+        const peer: Peer = { key, salt, secret, welcome: privateHash, logged: false, seen: Date.now() } as Peer;
 
         peer.link = new Datagram(text => this.write(key, text), payload => this.handle(peer, payload), () => this.drop(key));
         peer.session = {
@@ -258,7 +267,7 @@ export class UdpRouter {
     private socket: dgram.Socket;
     private routes: Map<string, number> = new Map();
 
-    constructor(private port: number, private options: { log?: LogLike } = {}, private pool?: () => UdpTarget[], backend?: Backend) {
+    constructor(private port: number, options: { log?: LogLike } = {}, private pool?: () => UdpTarget[], backend?: Backend) {
         this.log = asLogger(options.log, "udp");
         this.socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
 

@@ -55,11 +55,11 @@ jobs:
         with:
           name: addon-${{ matrix.config.name }}-${{ matrix.config.arch }}
           path: |
-            build/Release/NMiner.node
             index.js
             index.d.ts
             src/js/*.js
             src/js/*.d.ts
+            build/Release/NMiner.node
 
   publish:
     name: Publish & Release
@@ -89,6 +89,11 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: ./temp
+
+      - name: Compile TypeScript
+        run: |
+          npm install --ignore-scripts
+          npm run tsc
 
       - name: Prepare Package
         run: |

@@ -25,8 +25,13 @@ export function difficultyTarget(difficulty: number): string {
 };
 
 export function targetValue(target: string): bigint {
-    const difficulty = targetDifficulty(target);
-    return difficulty > 0 ? U64 / BigInt(difficulty) : U64;
+    if (target.length >= 16) {
+        const value = Buffer.from(target.substring(0, 16), "hex").readBigUInt64LE(0);
+        return value > 0n ? value : U64;
+    };
+
+    const compact = Buffer.from(target.padEnd(8, "0").substring(0, 8), "hex").readUInt32LE(0);
+    return compact > 0 ? U64 / BigInt(Math.floor(U32 / compact)) : U64;
 };
 
 export function hashValue(result: string): bigint | null {

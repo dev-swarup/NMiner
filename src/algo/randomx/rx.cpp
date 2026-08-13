@@ -327,6 +327,7 @@ void Rx::apply_variant(const std::string &variant)
 
 Rx::~Rx()
 {
+    std::lock_guard<std::mutex> lock(lifecycle);
     release();
 };
 
@@ -384,11 +385,7 @@ Napi::Value Rx::queue_allocate(const Napi::CallbackInfo &info, const std::string
     };
 
     auto seed_hash = ToVector(info[0].As<Napi::Buffer<uint8_t>>());
-
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        updating = true;
-    };
+    updating.store(true, std::memory_order_release);
 
     auto *worker = new AllocateWorker(env, this, std::move(seed_hash));
 
@@ -398,7 +395,9 @@ Napi::Value Rx::queue_allocate(const Napi::CallbackInfo &info, const std::string
 
 std::shared_ptr<RxVm> Rx::create_vm(uint32_t numa_node)
 {
-    if (!cache)
+    std::lock_guard<std::mutex> lock(lifecycle);
+
+    if (!cache || updating.load(std::memory_order_acquire))
         return nullptr;
 
     randomx_dataset *dataset = nullptr;

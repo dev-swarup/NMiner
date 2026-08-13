@@ -126,7 +126,8 @@ export class LocalBackend implements Backend {
 
         if (!meetsTarget(result, issue.target)) deny("Share is below your assigned difficulty.");
 
-        entry.vardiff.settle();
+        if (meetsTarget(result, entry.vardiff.target)) entry.vardiff.settle();
+
         entry.vardiff.submitted(issue.difficulty);
         entry.upstream.report(entry.client, entry.vardiff.hashrate);
 

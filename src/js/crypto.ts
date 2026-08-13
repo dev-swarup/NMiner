@@ -6,25 +6,6 @@ export function hash(salt: string | Buffer): Buffer {
     return crypto.createHash("sha256").update(salt).update("nminer-salt").digest();
 };
 
-let _subtle: SubtleCrypto | null = null;
-const getSubtle = (): SubtleCrypto => {
-    if (_subtle) return _subtle;
-
-    _subtle = (globalThis as any).crypto?.subtle ?? null;
-    return _subtle!;
-};
-
-const _keyCache = new WeakMap<Buffer, CryptoKey>();
-async function importKey(secret: Buffer): Promise<CryptoKey> {
-    let key = _keyCache.get(secret);
-    if (key) return key;
-
-    key = await getSubtle().importKey("raw", secret as any, { name: "CHACHA20-POLY1305" } as any, false, ["encrypt", "decrypt"]);
-    _keyCache.set(secret, key);
-
-    return key;
-};
-
 export function encrypt(secret: Buffer, data: any): string {
     crypto.randomFillSync(_nonce);
 
@@ -60,5 +41,3 @@ export function generateHandshake(j: NodeJS.ArrayBufferView<ArrayBufferLike>): {
 
     return { salt, session: hash(ecdh.computeSecret(j, "hex")) };
 };
-
-export { importKey as importCryptoKey };

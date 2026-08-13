@@ -42,7 +42,15 @@ Napi::Promise AllocateWorker::GetPromise()
 
 void AllocateWorker::Execute()
 {
-    while (rx->active_vms.load(std::memory_order_acquire) > 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::lock_guard<std::mutex> lock(rx->lifecycle);
+
+    for (uint32_t spins = 0; rx->active_vms.load(std::memory_order_acquire) > 0; ++spins)
+    {
+        if (spins >= kDrainSpins)
+            return SetError("timed out waiting for active VMs to release");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    };
 
     rx->release();
 
@@ -126,8 +134,7 @@ bool AllocateWorker::BuildDataset(randomx_flags flags)
 
 void AllocateWorker::Clear()
 {
-    std::lock_guard<std::mutex> lock(rx->mutex);
-    rx->updating = false;
+    rx->updating.store(false, std::memory_order_release);
 };
 
 void AllocateWorker::OnOK()

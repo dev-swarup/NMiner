@@ -50,6 +50,7 @@ export class NMiner {
     private rejected: number = 0;
 
     private m_job?: StratumJob & JobResult;
+    private m_seed?: string;
     private m_threads?: number[];
     private m_versions: Map<number, { job_id: string, diff: number }> = new Map();
 
@@ -60,6 +61,10 @@ export class NMiner {
 
     private chunk_gen: number = 0;
     private _chunkPollTimeout: NodeJS.Timeout | null = null;
+
+    private closed: boolean = false;
+    private timers: NodeJS.Timeout[] = [];
+    private _reconnectTimeout: NodeJS.Timeout | null = null;
 
     private schedule_chunk_poll() {
         if (this._chunkPollTimeout) clearTimeout(this._chunkPollTimeout);
@@ -93,10 +98,8 @@ export class NMiner {
                 };
             };
 
-            if (gen === this.chunk_gen && this.stratum && this.m_job)
-                this._chunkPollTimeout = setTimeout(poll, 500);
-            else
-                this._chunkPollTimeout = null;
+            if (gen !== this.chunk_gen) return;
+            this._chunkPollTimeout = this.stratum && this.m_job ? setTimeout(poll, 500) : null;
         };
 
         this._chunkPollTimeout = setTimeout(poll, 500);
@@ -159,12 +162,12 @@ export class NMiner {
         });
 
         const m_this = this;
-        PrintTopology(this.log).then(() => { m_this.reconnect(); });
+        PrintTopology(this.log).catch(err => this.log.warn("topology unavailable", { reason: err instanceof Error ? err.message : String(err) })).then(() => { m_this.reconnect(); });
 
         if (this.cpu.enabled) {
             let last_hashes = 0;
 
-            setInterval(() => {
+            this.timers.push(setInterval(() => {
                 if (!this.stratum) return;
 
                 const current_hashes = this.rx_job.get_hashes();
@@ -174,14 +177,14 @@ export class NMiner {
                 last_hashes = current_hashes;
 
                 this.cpu.info("speed", { "60s": PrintHashes(diff), hashes: current_hashes, threads: this.m_threads?.reduce((total, count) => total + count, 0) });
-            }, 60000);
+            }, 60000));
         };
 
         if (this.options.throttle) {
             let angle = 0;
             let cachedThreads: number | null = null;
 
-            setInterval(async () => {
+            this.timers.push(setInterval(async () => {
                 if (!this.stratum) return;
                 if (cachedThreads === null) cachedThreads = this.options.threads ?? await MaxThreads();
 
@@ -192,17 +195,19 @@ export class NMiner {
                 const throttle_ms = Math.floor(1000 + Math.random() * 1000);
 
                 if (throttle_threads > 0) this.rx_job.throttle(throttle_threads, throttle_ms);
-            }, 5000);
+            }, 5000));
         };
     };
 
     private retry_delay: number = 5000;
     private schedule_reconnect() {
+        if (this.closed || this._reconnectTimeout) return;
+
         const delay = Math.round(this.retry_delay * (0.8 + Math.random() * 0.4));
         this.retry_delay = Math.min(this.retry_delay * 2, 300000);
 
         this.net.warn("reconnecting", { retry: `${Math.round(delay / 1000)}s`, pool: this.pool });
-        setTimeout(() => this.reconnect(), delay);
+        this._reconnectTimeout = setTimeout(() => { this._reconnectTimeout = null; this.reconnect(); }, delay);
     };
 
     private apply_algo(job: StratumJob): boolean {
@@ -218,8 +223,12 @@ export class NMiner {
     };
 
     private async reconnect() {
+        if (this.closed) return;
+
         try {
             const stratum = this.stratum = await connect(this.pool, this.options?.proxy, this.options?.keepalive, this.options?.strictTls);
+
+            if (this.closed) return stratum.close();
             this.net.info("connected", { pool: stratum.host, ip: stratum.remoteAddress, proxy: this.options.proxy });
 
             const numa = getNumaNodes();
@@ -231,10 +240,11 @@ export class NMiner {
                     if (this.stratum !== stratum) return;
 
                     if (!this.apply_algo(job)) return stratum.close();
-                    this.on_job(job);
+                    this.on_job(job).catch(err => { this.log.error(err); stratum.close(); });
                 })
                 .on("close", async () => {
-                    if (this.stratum === stratum) this.stratum = undefined;
+                    if (this.stratum !== stratum) return;
+                    this.stratum = undefined;
 
                     this.rx_job.stop();
                     this.stop_chunk_poll();
@@ -275,15 +285,19 @@ export class NMiner {
             if (this.m_job && this.m_job.job_id === job.job_id && this.m_job.blob === job.blob && this.m_job.start_nonce === job.start_nonce)
                 return true;
 
-            if (job.seed_hash != this.m_job?.seed_hash || (this.options.algo && this.rx.variant != this.options.algo))
+            if (job.seed_hash != this.m_seed || (this.options.algo && this.rx.variant != this.options.algo))
                 try {
                     this.rx_job.stop();
+                    this.m_seed = undefined;
 
                     const start = Date.now();
                     this.dataset.info("dataset init", { mode: this.options.mode, algo: this.options.algo, seed: job.seed_hash.substring(0, 16), threads: os.cpus().length });
 
-                    if (await this.rx.reallocate(Buffer.from(job.seed_hash, "hex"), this.options.algo))
-                        this.dataset.success("dataset ready", { took: ms(start) });
+                    if (!await this.rx.reallocate(Buffer.from(job.seed_hash, "hex"), this.options.algo))
+                        throw new Error("RandomX dataset allocation failed");
+
+                    this.m_seed = job.seed_hash;
+                    this.dataset.success("dataset ready", { took: ms(start) });
 
                     const numa = getNumaNodes();
                     const used_threads = this.options.threads || await MaxThreads();
@@ -320,6 +334,27 @@ export class NMiner {
 
     public throttle(threads: number, ms: number): void {
         return this.rx_job.throttle(threads, ms);
+    };
+
+    public close(): void {
+        if (this.closed) return;
+        this.closed = true;
+
+        for (const timer of this.timers.splice(0)) clearInterval(timer);
+
+        if (this._reconnectTimeout) {
+            clearTimeout(this._reconnectTimeout);
+            this._reconnectTimeout = null;
+        };
+
+        this.stop_chunk_poll();
+        this.rx_job.stop();
+
+        const stratum = this.stratum;
+        this.stratum = undefined;
+
+        stratum?.close();
+        this.log.info("stopped", { accepted: this.accepted, rejected: this.rejected });
     };
 
 };

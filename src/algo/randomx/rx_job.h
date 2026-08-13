@@ -25,6 +25,7 @@ static constexpr size_t kNonceOffset = 39;
 static constexpr size_t kMaxBlobSize = 408;
 static constexpr uint32_t kNicehashMask = 0xFF000000u;
 static constexpr uint32_t kNicehashLimit = 0x01000000u;
+static constexpr uint32_t kVmAcquireTries = 200;
 
 struct NonceRange
 {
@@ -53,11 +54,14 @@ inline void write_unaligned(T *ptr, T val)
     std::memcpy(ptr, &val, sizeof(T));
 }
 
+class RxJob;
+
 struct JobResult
 {
     uint8_t nonce[4];
     uint8_t result[32];
     uint32_t version;
+    RxJob *owner;
 };
 
 class RxJob : public Napi::ObjectWrap<RxJob>
@@ -90,6 +94,12 @@ private:
     void Loop(uint32_t core_id, uint32_t numa_node);
     void StopLoop();
 
+    void ReleaseTsfn();
+    static void CleanupTsfn(void *arg);
+
+    void Wake();
+    std::shared_ptr<RxVm> AcquireVm(uint32_t numa_node);
+
     bool HasWork(size_t size);
     bool NextNonce(uint32_t &nonce);
     bool AdvanceRange(uint64_t exhausted);
@@ -101,8 +111,11 @@ private:
     void FlushHash(const std::shared_ptr<RxVm> &vm, const uint8_t *blob, size_t size, uint64_t target, uint32_t version, bool &is_first);
 
     Rx *rx = nullptr;
+    napi_env m_env = nullptr;
     Napi::ObjectReference rx_ref;
     Napi::ThreadSafeFunction tsfn;
+    std::atomic<bool> m_released{false};
+    std::atomic<uint32_t> m_inflight{0};
 
 #ifdef HAVE_HWLOC
     hwloc_topology_t topology = nullptr;
@@ -110,6 +123,7 @@ private:
 
     std::atomic<bool> m_active{false};
     std::atomic<bool> m_paused{false};
+    std::atomic<uint32_t> m_live{0};
     std::vector<std::thread> m_threads;
 
     std::mutex m_cv_mutex;

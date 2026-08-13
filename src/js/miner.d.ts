@@ -21,6 +21,7 @@ declare type RxNodeCache = {
 declare type RxCacheInfo = {
     l2PerThread: number;
     l3PerThread: number;
+    aes: "vaes512" | "aes-ni" | "soft";
     blake2: "avx2" | "sse41" | "reference";
     nodes: RxNodeCache[];
 }

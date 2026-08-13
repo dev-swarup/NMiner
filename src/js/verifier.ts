@@ -20,6 +20,7 @@ export class Verifier {
     private log: Logger;
     private seed: string = "";
     private failures: number = 0;
+    private stopped: boolean = false;
     private rotating: Promise<void> | null = null;
 
     constructor(private options: VerifierOptions) {
@@ -32,7 +33,7 @@ export class Verifier {
     public pending(): number { return this.native ? this.native.pending() : 0; };
 
     public sync(seed_hash: string): void {
-        if (!seed_hash || seed_hash === this.seed || this.rotating || this.failures >= 3) return;
+        if (this.stopped || !seed_hash || seed_hash === this.seed || this.rotating || this.failures >= 3) return;
 
         this.rotating = this.rotate(seed_hash).then(() => { this.failures = 0; }).catch(err => {
             this.log.error(err, {
@@ -51,6 +52,7 @@ export class Verifier {
     };
 
     public stop(): void {
+        this.stopped = true;
         this.native?.stop();
 
         this.seed = "";
@@ -67,6 +69,7 @@ export class Verifier {
             await this.rx.allocate(Buffer.from(seed_hash, "hex"));
         } else await this.rx.reallocate(Buffer.from(seed_hash, "hex"), this.options.algo ?? "rx/0");
 
+        if (this.stopped) return;
         if (!this.native) this.native = new (RxVerify as any)(this.rx, this.options.threads ?? 0);
 
         this.seed = seed_hash;

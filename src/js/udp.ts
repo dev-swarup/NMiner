@@ -16,7 +16,9 @@ const SEEN_WINDOW = 256;
 
 export class Datagram {
     private seq: number = 0;
-    private seen: number[] = [];
+    private at: number = 0;
+    private seen: Set<number> = new Set();
+    private ring: number[] = new Array(SEEN_WINDOW).fill(-1);
     private outbox: Map<number, { text: string, tries: number, timer: NodeJS.Timeout }> = new Map();
 
     constructor(private write: (text: string) => void, private deliver: (payload: string) => void, private dead: () => void) {
@@ -70,11 +72,15 @@ export class Datagram {
         if (!Number.isFinite(seq)) return;
 
         this.write(`${ACK}${seq.toString(36)}`);
-        if (this.seen.includes(seq)) return;
+        if (this.seen.has(seq)) return;
 
-        this.seen.push(seq);
-        if (this.seen.length > SEEN_WINDOW) this.seen.shift();
+        const evicted = this.ring[this.at];
+        if (evicted >= 0) this.seen.delete(evicted);
 
+        this.ring[this.at] = seq;
+        this.at = (this.at + 1) % SEEN_WINDOW;
+
+        this.seen.add(seq);
         this.deliver(text.slice(at + 1));
     };
 

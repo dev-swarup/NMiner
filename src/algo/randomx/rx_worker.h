@@ -1,6 +1,8 @@
 #pragma once
 #include "rx.h"
 
+static constexpr uint32_t kDrainSpins = 1000;
+
 class AllocateWorker : public Napi::AsyncWorker
 {
 public:

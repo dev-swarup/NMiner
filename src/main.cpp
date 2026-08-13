@@ -146,22 +146,26 @@ Napi::Value HugePages(const Napi::CallbackInfo &info)
 #include <hwloc.h>
 #endif
 
-Napi::Value GetNumaNodes(const Napi::CallbackInfo &info)
+static int ScanNumaNodes()
 {
-    Napi::Env env = info.Env();
-
 #ifdef HAVE_HWLOC
     hwloc_topology_t topology;
     hwloc_topology_init(&topology);
     hwloc_topology_load(topology);
 
-    int numa_nodes = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NUMANODE);
+    const int numa_nodes = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NUMANODE);
 
     hwloc_topology_destroy(topology);
-    return Napi::Number::New(env, numa_nodes == 0 ? 1 : numa_nodes);
+    return numa_nodes <= 0 ? 1 : numa_nodes;
 #else
-    return Napi::Number::New(env, 1);
+    return 1;
 #endif
+};
+
+Napi::Value GetNumaNodes(const Napi::CallbackInfo &info)
+{
+    static const int numa_nodes = ScanNumaNodes();
+    return Napi::Number::New(info.Env(), numa_nodes);
 };
 
 namespace
@@ -175,7 +179,7 @@ namespace
         uint32_t pus;
     };
 
-    std::vector<NodeCache> ScanCaches()
+    std::vector<NodeCache> ScanCachesOnce()
     {
         std::vector<NodeCache> nodes;
 
@@ -224,6 +228,12 @@ namespace
         return nodes;
     };
 
+    const std::vector<NodeCache> &ScanCaches()
+    {
+        static const std::vector<NodeCache> nodes = ScanCachesOnce();
+        return nodes;
+    };
+
     uint32_t ThreadsForNode(const NodeCache &node)
     {
         uint32_t limit = node.cores;
@@ -240,7 +250,7 @@ namespace
 Napi::Value GetCacheInfo(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
-    const std::vector<NodeCache> nodes = ScanCaches();
+    const std::vector<NodeCache> &nodes = ScanCaches();
 
     Napi::Array list = Napi::Array::New(env, nodes.size());
 
@@ -274,7 +284,7 @@ Napi::Value GetCacheInfo(const Napi::CallbackInfo &info)
 Napi::Value GetRecommendedThreads(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
-    const std::vector<NodeCache> nodes = ScanCaches();
+    const std::vector<NodeCache> &nodes = ScanCaches();
 
     Napi::Array out = Napi::Array::New(env, nodes.size());
 

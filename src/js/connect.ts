@@ -11,6 +11,7 @@ import { EventEmitter } from "./utils.js";
 import { hash, encrypt, decrypt, createExchange } from "./crypto.js";
 
 const DNS_TTL = 300000;
+const MAX_LINE = 1 << 20;
 const _dnsCache = new Map<string, { address: string, expires: number }>();
 
 export function InvalidateHostname(hostname: string): void {
@@ -147,6 +148,14 @@ export class StratumClient extends EventEmitter<{
                                 chunks.push(tail);
                                 totalLen += tail.length;
                             }
+                        };
+
+                        if (totalLen > MAX_LINE) {
+                            chunks.length = 0;
+                            totalLen = 0;
+
+                            this.closeReason = `pool sent more than ${MAX_LINE} bytes without a newline`;
+                            tcp.destroy();
                         };
 
                         break;
@@ -376,7 +385,7 @@ async function Tcp(protocol: string, host: string, port: number, agent?: string,
                     resolved = true; cb(socket);
                 };
 
-                const tlsSocket = tls.connect({ socket, servername: host, rejectUnauthorized: strictTls === true }, () => {
+                const tlsSocket = tls.connect({ socket, servername: host, rejectUnauthorized: strictTls !== false }, () => {
                     resolve(tlsSocket);
                 });
 

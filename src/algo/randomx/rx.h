@@ -117,7 +117,7 @@ public:
 
     RxAlgoVersion algo_version() const { return m_version.load(std::memory_order_relaxed); };
 
-    std::mutex mutex;
+    std::mutex lifecycle;
     std::atomic<int> active_vms { 0 };
     std::atomic<bool> updating { false };
     RxMode m_mode { RxMode::Light };

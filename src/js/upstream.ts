@@ -70,6 +70,7 @@ const rateOf = (client: UpstreamClient): number => client.hashrate > 0 ? client.
 
 export class Upstream {
     private links: Link[] = [];
+    private live: Set<UpstreamClient> = new Set();
     private homes: Map<UpstreamClient, Link> = new Map();
     private ledgers: Map<UpstreamClient, Ledger> = new Map();
 
@@ -106,7 +107,11 @@ export class Upstream {
     };
 
     public async attach(client: UpstreamClient): Promise<StratumJob & Grant> {
+        this.live.add(client);
+
         const link = await this.pick(client);
+        if (!this.live.has(client)) throw new Error("Miner detached before it was housed.");
+
         this.house(link, client);
 
         const grant = this.grant(link, client); if (!grant) {
@@ -118,6 +123,8 @@ export class Upstream {
     };
 
     public detach(client: UpstreamClient): void {
+        this.live.delete(client);
+
         this.evict(client);
         this.ledgers.delete(client);
     };
@@ -171,6 +178,7 @@ export class Upstream {
             link.socket?.close();
         };
 
+        this.live.clear();
         this.homes.clear();
         this.ledgers.clear();
     };
@@ -220,7 +228,10 @@ export class Upstream {
             ledger.job_id = job_id;
         };
 
-        ledger.ranges.push(range);
+        const last = ledger.ranges[ledger.ranges.length - 1];
+
+        if (last && last.nonce_limit === range.start_nonce) last.nonce_limit = range.nonce_limit;
+        else ledger.ranges.push(range);
     };
 
     public owns(client: UpstreamClient, nonce: number): boolean {
@@ -336,7 +347,7 @@ export class Upstream {
             if (grant)
                 client.job(this.payload(link, client, grant));
             else
-                this.migrate(link, client).then(moved => { if (!moved) client.drop("Upstream nonce space is exhausted."); });
+                this.migrate(link, client).then(moved => { if (!moved) client.drop("Upstream nonce space is exhausted."); }).catch(() => { });
         };
     };
 
@@ -362,21 +373,26 @@ export class Upstream {
     };
 
     private async migrate(from: Link, client: UpstreamClient): Promise<boolean> {
+        let link: Link;
+        try { link = await this.pick(client, from); } catch { return false; };
+
+        if (!this.live.has(client)) return false;
+
         this.evict(client);
+        this.house(link, client);
 
-        try {
-            const link = await this.pick(client, from);
-            this.house(link, client);
-
-            const grant = this.grant(link, client);
-            if (!grant) return false;
-
+        const grant = this.grant(link, client);
+        if (grant) {
             client.job(this.payload(link, client, grant));
             return true;
-        } catch {
-            if (from.socket) this.house(from, client);
-            return false;
         };
+
+        if (from.socket) {
+            this.evict(client);
+            this.house(from, client);
+        };
+
+        return false;
     };
 
     private reslice(): void {

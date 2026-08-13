@@ -3,6 +3,15 @@
 
 #include "rx_job.h"
 
+namespace
+{
+    struct LiveGuard
+    {
+        std::atomic<uint32_t> &count;
+        ~LiveGuard() { count.fetch_sub(1, std::memory_order_relaxed); };
+    };
+};
+
 static uint32_t read_txn_count(const uint8_t *blob, size_t size)
 {
     constexpr size_t offset = 75;
@@ -25,12 +34,15 @@ RxJob::RxJob(const Napi::CallbackInfo &info) : Napi::ObjectWrap<RxJob>(info)
     {
         Napi::Error::New(env, "Expected Rx instance and submit callback").ThrowAsJavaScriptException();
         return;
-    }
+    };
 
     rx = Rx::Unwrap(info[0].As<Napi::Object>());
     rx_ref = Napi::Persistent(info[0].As<Napi::Object>());
 
     tsfn = Napi::ThreadSafeFunction::New(env, info[1].As<Napi::Function>(), "submit", 0, 1, [](Napi::Env) {});
+
+    m_env = env;
+    napi_add_env_cleanup_hook(env, &RxJob::CleanupTsfn, this);
 
 #ifdef HAVE_HWLOC
     hwloc_topology_init(&topology);
@@ -40,15 +52,31 @@ RxJob::RxJob(const Napi::CallbackInfo &info) : Napi::ObjectWrap<RxJob>(info)
     tsfn.Unref(env);
 };
 
+void RxJob::CleanupTsfn(void *arg)
+{
+    static_cast<RxJob *>(arg)->ReleaseTsfn();
+};
+
+void RxJob::ReleaseTsfn()
+{
+    if (m_released.exchange(true, std::memory_order_relaxed))
+        return;
+
+    StopLoop();
+    if (tsfn) tsfn.Abort();
+};
+
 RxJob::~RxJob()
 {
-    StopLoop();
-    tsfn.Release();
+    if (m_env && !m_released.load(std::memory_order_relaxed))
+        napi_remove_env_cleanup_hook(m_env, &RxJob::CleanupTsfn, this);
+
+    ReleaseTsfn();
 
 #ifdef HAVE_HWLOC
     if (topology) hwloc_topology_destroy(topology);
 #endif
-}
+};
 
 Napi::Object RxJob::Init(Napi::Env env, Napi::Object exports)
 {
@@ -108,18 +136,7 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo &info)
         return env.Null();
     };
 
-    uint64_t new_target = 0;
-    {
-        const auto target = ToVector(info[1].As<Napi::Buffer<uint8_t>>());
-
-        if (target.size() >= 8)
-            new_target = read_unaligned(reinterpret_cast<const uint64_t *>(target.data()));
-        else if (target.size() >= 4)
-        {
-            const uint32_t compact = read_unaligned(reinterpret_cast<const uint32_t *>(target.data()));
-            if (compact) new_target = 0xFFFFFFFFFFFFFFFFULL / (0xFFFFFFFFULL / uint64_t(compact));
-        };
-    };
+    const uint64_t new_target = ParseTarget(ToVector(info[1].As<Napi::Buffer<uint8_t>>()));
 
     if (new_target == 0)
     {
@@ -168,7 +185,7 @@ Napi::Value RxJob::SendJob(const Napi::CallbackInfo &info)
         version = m_job_version.fetch_add(1, std::memory_order_release) + 1;
     };
 
-    m_cv.notify_all();
+    Wake();
 
     const uint32_t txn_count = read_txn_count(blob.data(), blob_size);
 
@@ -203,7 +220,7 @@ Napi::Value RxJob::QueueRange(const Napi::CallbackInfo &info)
         m_queued.push_back({start, limit});
     };
 
-    m_cv.notify_all();
+    Wake();
     return Napi::Boolean::New(env, true);
 };
 
@@ -228,20 +245,33 @@ Napi::Value RxJob::Start(const Napi::CallbackInfo &info)
 
     if (m_active.load(std::memory_order_relaxed))
     {
-        if (m_paused.exchange(false, std::memory_order_relaxed))
-            m_cv.notify_all();
+        if (m_live.load(std::memory_order_relaxed) > 0)
+        {
+            if (m_paused.exchange(false, std::memory_order_relaxed))
+                Wake();
 
-        return env.Undefined();
+            return env.Undefined();
+        };
+
+        StopLoop();
     };
 
     std::vector<uint32_t> counts;
     if (info.Length() > 0) counts = ParseThreads(info[0]);
 
+    const std::vector<ThreadSlot> slots = PlanThreads(std::move(counts));
+    if (slots.empty()) return env.Undefined();
+
     m_active.store(true, std::memory_order_relaxed);
     m_paused.store(false, std::memory_order_relaxed);
 
-    for (const ThreadSlot &slot : PlanThreads(std::move(counts)))
+    tsfn.Ref(env);
+
+    for (const ThreadSlot &slot : slots)
+    {
+        m_live.fetch_add(1, std::memory_order_relaxed);
         m_threads.emplace_back(&RxJob::Loop, this, slot.core_id, slot.numa_node);
+    };
 
     return env.Undefined();
 };
@@ -249,7 +279,7 @@ Napi::Value RxJob::Start(const Napi::CallbackInfo &info)
 Napi::Value RxJob::Pause(const Napi::CallbackInfo &info)
 {
     m_paused.store(true, std::memory_order_relaxed);
-    m_cv.notify_all();
+    Wake();
 
     return info.Env().Undefined();
 };
@@ -257,18 +287,48 @@ Napi::Value RxJob::Pause(const Napi::CallbackInfo &info)
 Napi::Value RxJob::Stop(const Napi::CallbackInfo &info)
 {
     StopLoop();
+
+    if (tsfn && m_inflight.load(std::memory_order_relaxed) == 0)
+        tsfn.Unref(info.Env());
+
     return info.Env().Undefined();
 };
 
 void RxJob::StopLoop()
 {
     m_active.store(false, std::memory_order_relaxed);
-    m_cv.notify_all();
+    Wake();
 
     for (auto &t : m_threads)
         if (t.joinable()) t.join();
 
     m_threads.clear();
+    m_throttle_count.store(0, std::memory_order_relaxed);
+};
+
+void RxJob::Wake()
+{
+    { 
+        std::lock_guard<std::mutex> lock(m_cv_mutex); 
+    };
+    m_cv.notify_all();
+};
+
+std::shared_ptr<RxVm> RxJob::AcquireVm(uint32_t numa_node)
+{
+    for (uint32_t tries = 0; m_active.load(std::memory_order_relaxed) && tries < kVmAcquireTries; ++tries)
+    {
+        if (std::shared_ptr<RxVm> vm = rx->create_vm(numa_node))
+            return vm;
+
+        if (numa_node != 0)
+            if (std::shared_ptr<RxVm> vm = rx->create_vm(0))
+                return vm;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    };
+
+    return nullptr;
 };
 
 std::vector<RxJob::ThreadSlot> RxJob::PlanThreads(std::vector<uint32_t> counts)
@@ -344,10 +404,16 @@ void RxJob::SubmitShare(const uint8_t *hash, const uint8_t *blob, uint64_t targe
     auto *r = new JobResult();
     std::memcpy(r->nonce, blob + kNonceOffset, sizeof(r->nonce));
     std::memcpy(r->result, hash, sizeof(r->result));
+
+    r->owner = this;
     r->version = version;
+
+    m_inflight.fetch_add(1, std::memory_order_relaxed);
 
     const napi_status status = tsfn.BlockingCall(r, [](Napi::Env env, Napi::Function jsSubmit, JobResult *result)
     {
+        RxJob *owner = result->owner;
+
         jsSubmit.Call({
             Napi::Buffer<uint8_t>::Copy(env, result->nonce, sizeof(result->nonce)),
             Napi::Buffer<uint8_t>::Copy(env, result->result, sizeof(result->result)),
@@ -355,10 +421,16 @@ void RxJob::SubmitShare(const uint8_t *hash, const uint8_t *blob, uint64_t targe
         });
 
         delete result;
+
+        if (owner->m_inflight.fetch_sub(1, std::memory_order_relaxed) == 1 && !owner->m_active.load(std::memory_order_relaxed))
+            owner->tsfn.Unref(env);
     });
 
     if (status != napi_ok)
+    {
+        m_inflight.fetch_sub(1, std::memory_order_relaxed);
         delete r;
+    };
 };
 
 void RxJob::FlushHash(const std::shared_ptr<RxVm> &vm, const uint8_t *blob, size_t size, uint64_t target, uint32_t version, bool &is_first)
@@ -458,9 +530,10 @@ void RxJob::ApplyThrottle()
 
 void RxJob::Loop(uint32_t core_id, uint32_t numa_node)
 {
+    LiveGuard live{m_live};
     BindThread(core_id);
 
-    std::shared_ptr<RxVm> vm = rx->create_vm(numa_node);
+    std::shared_ptr<RxVm> vm = AcquireVm(numa_node);
     if (!vm) return;
 
     size_t size = 0;
@@ -481,10 +554,7 @@ void RxJob::Loop(uint32_t core_id, uint32_t numa_node)
             while (rx->updating.load(std::memory_order_acquire) && m_active.load(std::memory_order_relaxed))
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-            if (!m_active.load(std::memory_order_relaxed))
-                return;
-
-            vm = rx->create_vm(numa_node);
+            vm = AcquireVm(numa_node);
             if (!vm) return;
 
             version = m_job_version.load(std::memory_order_acquire) - 1;
