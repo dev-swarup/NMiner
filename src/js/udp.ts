@@ -123,7 +123,14 @@ export class UdpClient {
         clearInterval(this.hello);
         this.link?.stop();
 
-        try { this.socket.close(); } catch { };
+        const socket = this.socket, shut = () => {
+            clearTimeout(timer);
+            try { socket.close(); } catch { };
+        };
+
+        const timer = setTimeout(shut, 250);
+
+        try { socket.send(RESET, this.port, this.host, shut); } catch { shut(); };
         for (const handler of this.handlers.get("close") ?? []) handler();
     };
 

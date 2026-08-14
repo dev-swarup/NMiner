@@ -372,20 +372,18 @@ Napi::Value Rx::queue_allocate(const Napi::CallbackInfo &info, const std::string
         return env.Null();
     };
 
-    if (!variant.empty())
-    {
-        RxAlgoVersion version;
-        if (!ParseVariant(variant, version))
-        {
-            Napi::Error::New(env, kVariantError).ThrowAsJavaScriptException();
-            return env.Null();
-        };
+    RxAlgoVersion version;
 
-        apply_variant(variant);
+    if (!variant.empty() && !ParseVariant(variant, version))
+    {
+        Napi::Error::New(env, kVariantError).ThrowAsJavaScriptException();
+        return env.Null();
     };
 
     auto seed_hash = ToVector(info[0].As<Napi::Buffer<uint8_t>>());
     updating.store(true, std::memory_order_release);
+
+    if (!variant.empty()) apply_variant(variant);
 
     auto *worker = new AllocateWorker(env, this, std::move(seed_hash));
 

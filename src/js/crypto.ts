@@ -7,9 +7,9 @@ export function hash(salt: string | Buffer): Buffer {
 };
 
 export function encrypt(secret: Buffer, data: any): string {
-    crypto.randomFillSync(_nonce);
-
     const text: string = typeof data === "string" ? data : JSON.stringify(data);
+
+    crypto.randomFillSync(_nonce);
     const cipher = crypto.createCipheriv("chacha20-poly1305", secret, _nonce, { authTagLength: 16 } as any);
 
     const encrypted = cipher.update(text, "utf8"); cipher.final();

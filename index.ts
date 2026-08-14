@@ -1,9 +1,9 @@
 import os from "os";
 import { Level, Logger, Sink, createLogger, ms } from "./src/js/logger.js";
 
-import { Rx, RxJob, RxVariant, JobResult } from "./src/js/miner.js";
 import { PrintTopology, MaxThreads, getNumaNodes } from "./src/js/topology.js";
 import { connect, ALGORITHMS, StratumClient, StratumJob } from "./src/js/connect.js";
+import { Rx, RxJob, RxVariant, JobResult, recommendedThreads } from "./src/js/miner.js";
 
 export type { Level, Logger, Sink, Entry } from "./src/js/logger.js";
 
@@ -114,6 +114,13 @@ export class NMiner {
             clearTimeout(this._chunkPollTimeout);
             this._chunkPollTimeout = null;
         };
+    };
+
+    private async plan_threads(): Promise<number[]> {
+        if (this.options.threads) return DistributeThreads(this.options.threads, getNumaNodes());
+
+        const recommended = recommendedThreads();
+        return recommended.some(count => count > 0) ? recommended : DistributeThreads(await MaxThreads(), getNumaNodes());
     };
 
     private track_version(result: JobResult, job_id: string) {
@@ -231,9 +238,7 @@ export class NMiner {
             if (this.closed) return stratum.close();
             this.net.info("connected", { pool: stratum.host, ip: stratum.remoteAddress, proxy: this.options.proxy });
 
-            const numa = getNumaNodes();
-            const max_threads = await MaxThreads();
-            const used_threads = this.options.threads || max_threads;
+            const used_threads = this.options.threads || await MaxThreads();
 
             stratum
                 .on("job", async (job) => {
@@ -257,7 +262,7 @@ export class NMiner {
             if (!this.apply_algo(job)) return stratum.close();
 
             if (await this.on_job(job)) {
-                this.m_threads = DistributeThreads(used_threads, numa);
+                this.m_threads = await this.plan_threads();
                 this.rx_job.start(this.m_threads);
 
                 this.retry_delay = 5000;
@@ -299,13 +304,10 @@ export class NMiner {
                     this.m_seed = job.seed_hash;
                     this.dataset.success("dataset ready", { took: ms(start) });
 
-                    const numa = getNumaNodes();
-                    const used_threads = this.options.threads || await MaxThreads();
-
-                    this.m_threads = DistributeThreads(used_threads, numa);
+                    this.m_threads = await this.plan_threads();
                     this.rx_job.start(this.m_threads);
 
-                    this.cpu.debug("mining", { threads: used_threads, numa, split: this.m_threads.join("/") });
+                    this.cpu.debug("mining", { threads: this.m_threads.reduce((total, count) => total + count, 0), numa: getNumaNodes(), split: this.m_threads.join("/") });
                 } catch (err) {
                     this.log.error(err);
                     if (this.stratum) this.stratum.close();

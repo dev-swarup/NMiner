@@ -161,10 +161,11 @@ export class UdpEdge {
 
     public receive(key: string, text: string): void {
         if (!text) return;
+        if (text[0] === RESET) return this.drop(key);
         if (text[0] === HELLO) return this.greet(key, text.slice(1));
 
         const peer = this.peers.get(key);
-        if (!peer) return this.write(key, RESET);
+        if (!peer) { this.write(key, RESET); return this.drop(key); };
 
         peer.seen = Date.now();
         peer.link.receive(text);
@@ -173,6 +174,8 @@ export class UdpEdge {
     public drop(key: string): void { this.discard(key, true); };
 
     private discard(key: string, notify: boolean): void {
+        if (notify) this.options.dropped?.(key);
+
         const peer = this.peers.get(key);
         if (!peer) return;
 
@@ -182,7 +185,6 @@ export class UdpEdge {
         this.backend.close(peer.session);
 
         this.log.debug("peer dropped", { session: peer.session.id, peer: key });
-        if (notify) this.options.dropped?.(key);
     };
 
     public close(): void {
