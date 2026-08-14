@@ -62,7 +62,7 @@ export class Verifier {
     private async rotate(seed_hash: string): Promise<void> {
         const started = Date.now();
 
-        this.log.info("dataset init", { mode: this.options.mode ?? "FAST", algo: this.options.algo ?? "rx/0", seed: seed_hash.substring(0, 16), threads: this.options.threads || undefined });
+        this.log.info("init dataset", { algo: this.options.algo ?? "rx/0", mode: this.options.mode ?? "FAST", threads: this.options.threads || undefined, seed: `${seed_hash.substring(0, 16)}...` });
 
         if (!this.rx) {
             this.rx = new (Rx as any)(this.options.algo ?? "rx/0", this.options.mode ?? "FAST");

@@ -7,6 +7,7 @@ import { Upstream, UpstreamClient, UpstreamOptions, UpstreamRegistry } from "./u
 
 export interface Session {
     id: number;
+    peer?: string;
     push(job: any): void;
     kill(message: string): void;
 };
@@ -50,7 +51,7 @@ export interface ShareReport {
 
 export type ShareSink = (share: ShareReport) => void;
 
-type Entry = { client: UpstreamClient, upstream: Upstream, address: string, vardiff: VarDiff };
+type Entry = { client: UpstreamClient, upstream: Upstream, address: string, peer?: string, vardiff: VarDiff };
 
 export class LocalBackend implements Backend {
     private log: Logger;
@@ -84,7 +85,7 @@ export class LocalBackend implements Backend {
             target: pool => vardiff.tune(pool)
         };
 
-        const entry: Entry = { client, upstream, address, vardiff };
+        const entry: Entry = { client, upstream, address, peer: session.peer, vardiff };
         this.entries.set(session, entry);
 
         try {
@@ -182,8 +183,8 @@ export class LocalBackend implements Backend {
         this.verifier?.stop();
     };
 
-    public accounting(): Array<{ address: string, hashrate: number, difficulty: number, shares: number, work: number, solved: number }> {
-        return [...this.entries.values()].map(entry => ({ address: entry.address, hashrate: Math.round(entry.vardiff.hashrate), difficulty: entry.vardiff.difficulty, shares: entry.vardiff.accepted, work: entry.vardiff.work, solved: entry.vardiff.solved }));
+    public accounting(): Array<{ address: string, peer: string, hashrate: number, difficulty: number, shares: number, work: number, solved: number }> {
+        return [...this.entries.values()].map(entry => ({ address: entry.address, peer: entry.peer ?? "-", hashrate: Math.round(entry.vardiff.hashrate), difficulty: entry.vardiff.difficulty, shares: entry.vardiff.accepted, work: entry.vardiff.work, solved: entry.vardiff.solved }));
     };
 
     private static accepted(result: any): boolean {
@@ -239,7 +240,7 @@ export class WorkerBackend implements Backend {
 
     public login(session: Session, address: string, pass: string, threads?: number): Promise<any> {
         this.sessions.set(session.id, session);
-        return this.call(session, "login", { a: address, p: pass, k: threads });
+        return this.call(session, "login", { a: address, p: pass, k: threads, w: session.peer });
     };
 
     public chunk(session: Session, job_id: string, hashrate?: number): Promise<any> {
@@ -313,6 +314,8 @@ export class PrimaryHub {
 
             this.sessions.set(key, session);
         };
+
+        if (typeof raw.w === "string") session.peer = raw.w;
 
         try {
             const d = raw.t === "login" ? await this.backend.login(session, raw.a, raw.p, raw.k) : raw.t === "chunk" ? await this.backend.chunk(session, raw.j, raw.h) : raw.t === "submit" ? await this.backend.submit(session, raw.j, raw.n, raw.r) : null;

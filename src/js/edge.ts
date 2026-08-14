@@ -84,6 +84,7 @@ export class Edge {
 
         const session: Session = {
             id: nextSession(),
+            peer: req.socket.remoteAddress,
             push: job => ToMiner(["job", job]),
             kill: message => { ToMiner(["error", message]); ws.close(); }
         };
@@ -142,6 +143,8 @@ interface Peer {
 
 export interface UdpEdgeOptions {
     log?: LogLike;
+    left?: (key: string) => void;
+    joined?: (key: string) => void;
     dropped?: (key: string) => void;
 };
 
@@ -180,6 +183,7 @@ export class UdpEdge {
         if (!peer) return;
 
         this.peers.delete(key);
+        this.options.left?.(key);
 
         peer.link.stop();
         this.backend.close(peer.session);
@@ -211,11 +215,14 @@ export class UdpEdge {
         peer.link = new Datagram(text => this.write(key, text), payload => this.handle(peer, payload), () => this.drop(key));
         peer.session = {
             id: nextSession(),
+            peer: key.slice(0, key.lastIndexOf(":")),
             push: job => this.deliver(peer, ["job", job]),
             kill: message => { this.deliver(peer, ["error", message]); setTimeout(() => this.drop(key), 1500).unref?.(); }
         };
 
         this.peers.set(key, peer);
+        this.options.joined?.(key);
+
         this.write(key, WELCOME + privateHash);
 
         this.log.debug("peer connected", { session: peer.session.id, peer: key });
@@ -263,15 +270,40 @@ export interface UdpTarget {
     send(message: any): void;
 };
 
+export interface UdpRouterOptions extends UdpEdgeOptions {
+    reusePort?: boolean;
+};
+
+export function probeReusePort(port: number): Promise<boolean> {
+    const open = () => new Promise<dgram.Socket | null>(resolve => {
+        let socket: dgram.Socket;
+        try { socket = dgram.createSocket({ type: "udp4", reusePort: true } as any); } catch { return resolve(null); };
+
+        socket.once("error", () => resolve(null));
+        try { socket.bind(port, "0.0.0.0", () => resolve(socket)); } catch { resolve(null); };
+    });
+
+    return open().then(async first => {
+        if (!first) return false;
+
+        const second = await open();
+
+        try { first.close(); } catch { };
+        try { second?.close(); } catch { };
+
+        return second !== null;
+    });
+};
+
 export class UdpRouter {
     private log: Logger;
     private edge?: UdpEdge;
     private socket: dgram.Socket;
     private routes: Map<string, number> = new Map();
 
-    constructor(private port: number, options: { log?: LogLike } = {}, private pool?: () => UdpTarget[], backend?: Backend) {
+    constructor(private port: number, private options: UdpRouterOptions = {}, private pool?: () => UdpTarget[], backend?: Backend) {
         this.log = asLogger(options.log, "udp");
-        this.socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
+        this.socket = dgram.createSocket({ type: "udp4", reuseAddr: !options.reusePort, reusePort: options.reusePort === true } as any);
 
         if (!this.pool && backend) this.edge = new UdpEdge(backend, (key, text) => this.write(key, text), options);
 
@@ -280,7 +312,8 @@ export class UdpRouter {
     };
 
     public listen(): void {
-        this.socket.bind(this.port, "0.0.0.0", () => this.log.info("listening", { port: this.port, transport: "udp" }));
+        const shared = this.options.reusePort === true;
+        this.socket.bind(this.port, "0.0.0.0", () => this.log[shared ? "debug" : "info"]("listening", { port: this.port, transport: "udp" }));
     };
 
     public write(key: string, text: string): void {

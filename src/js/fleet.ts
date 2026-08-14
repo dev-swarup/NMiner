@@ -98,6 +98,7 @@ export class Fleet {
 
     private log: Logger;
     private server?: net.Server;
+    private greeting?: () => any;
 
     constructor(private size: number, log: LogLike, private onMessage: (child: FleetChild, raw: any) => void, private onExit: (child: FleetChild) => void) {
         this.log = asLogger(log, "fleet");
@@ -113,6 +114,13 @@ export class Fleet {
 
         this.server.on("error", err => this.log.error(err, { port }));
         this.server.listen(port, "0.0.0.0", () => this.log.info("listening", { port, workers: this.size, upstream: "primary" }));
+    };
+
+    public greet(build: () => any): void {
+        this.greeting = build;
+
+        const hello = build();
+        if (hello) for (const child of this.children.values()) child.send(hello);
     };
 
     public dispatch(socket: Socket): void {
@@ -160,12 +168,16 @@ export class Fleet {
             this.backoff = Math.min(RESPAWN_MAX, this.backoff * 2);
         });
 
+        const hello = this.greeting?.();
+        if (hello) child.send(hello);
+
         for (const socket of this.pending.splice(0)) child.hand(socket);
     };
 
     private deliver(child: FleetChild, raw: any): void {
         if (!raw || typeof raw.t !== "string") return;
 
+        if (raw.t === "on") { child.load++; return; };
         if (raw.t === "off") { child.load = Math.max(0, child.load - 1); return; };
         if (raw.t === "log") {
             const entry = raw.e as Entry;
