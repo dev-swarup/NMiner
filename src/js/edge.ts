@@ -174,9 +174,14 @@ export class UdpEdge {
     public get size(): number { return this.peers.size; };
 
     public receive(key: string, text: string): void {
-        if (!text) return;
-        if (text[0] === RESET) return this.drop(key);
-        if (text[0] === HELLO) return this.greet(key, text.slice(1));
+        if (text && text[0] === HELLO) {
+            this.greet(key, text.slice(1));
+
+            if (!this.peers.has(key)) this.options.dropped?.(key);
+            return;
+        };
+
+        if (!text || text[0] === RESET) return this.drop(key);
 
         const peer = this.peers.get(key);
         if (!peer) { this.write(key, RESET); return this.drop(key); };
