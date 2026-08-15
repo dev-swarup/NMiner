@@ -1,6 +1,6 @@
 import { LogLike, Logger, asLogger } from "./logger.js";
 import { connect, StratumClient, StratumJob } from "./connect.js";
-import { Grant, NonceSpace, capacity, chunkSize, createSpace, fullSpace, nicehashSlot, nicehashSpace, spaceLeft, take, NICEHASH_SLOTS } from "./nonce.js";
+import { Grant, Ledger, NonceSpace, capacity, chunkSize, createSpace, fullSpace, nicehashSlot, nicehashSpace, spaceLeft, take, NICEHASH_SLOTS } from "./nonce.js";
 
 export interface UpstreamOptions {
     log?: LogLike;
@@ -8,6 +8,7 @@ export interface UpstreamOptions {
     maxLinks?: number;
     keepalive?: boolean;
     strictTls?: boolean;
+    idleTimeout?: number;
     expandNicehash?: boolean;
 };
 
@@ -18,18 +19,13 @@ export interface UpstreamClient {
     job(payload: StratumJob & Partial<Grant>): void;
 };
 
-interface Ledger {
-    prior: Grant[];
-    job_id: string;
-    ranges: Grant[];
-};
-
 export type ChunkReply = Grant | { migrated: true } | { job_expired: true } | { retry_after: number };
 
 const SAFETY = 0.8;
 const STRAY_SAMPLE = 8;
 const MIN_INTERVAL = 4000;
 const IDLE_LINK_MS = 60000;
+export const IDLE_POOL_MS = 300000;
 const REBALANCE_MS = 15000;
 const MAX_INTERVAL = 240000;
 const DEFAULT_INTERVAL = 120000;
@@ -83,11 +79,11 @@ export class Upstream {
 
     private log: Logger;
 
-    constructor(public pool: string, public address: string, public pass: string, private options: UpstreamOptions) {
+    constructor(public pool: string, public address: string, public pass: string, private options: UpstreamOptions, private retired?: () => void) {
         this.log = asLogger(options.log, "pool");
         this.expand = options.expandNicehash === true;
 
-        this.timer = setInterval(() => this.rebalance(), REBALANCE_MS);
+        this.timer = setInterval(() => this.rebalance(), Math.max(1000, Math.min(REBALANCE_MS, (options.idleTimeout ?? IDLE_POOL_MS) / 2)));
         this.timer.unref?.();
     };
 
@@ -201,6 +197,7 @@ export class Upstream {
         link.clients.delete(client);
         link.load = Math.max(0, link.load - rateOf(client));
 
+        if (link.clients.size === 0) link.idle_at = Date.now();
         this.homes.delete(client);
     };
 
@@ -221,35 +218,20 @@ export class Upstream {
         let ledger = this.ledgers.get(client);
 
         if (!ledger) {
-            ledger = { job_id, ranges: [], prior: [] };
+            ledger = new Ledger();
             this.ledgers.set(client, ledger);
         };
 
-        if (ledger.job_id !== job_id) {
-            ledger.prior = ledger.ranges;
-            ledger.ranges = [];
-            ledger.job_id = job_id;
-        };
-
-        const last = ledger.ranges[ledger.ranges.length - 1];
-
-        if (last && last.nonce_limit === range.start_nonce) last.nonce_limit = range.nonce_limit;
-        else ledger.ranges.push(range);
+        ledger.record(job_id, range);
     };
 
     public owns(client: UpstreamClient, nonce: number): boolean {
-        const ledger = this.ledgers.get(client);
-        if (!ledger) return false;
-
-        for (const range of ledger.ranges) if (nonce >= range.start_nonce && nonce < range.nonce_limit) return true;
-        for (const range of ledger.prior) if (nonce >= range.start_nonce && nonce < range.nonce_limit) return true;
-
-        return false;
+        return this.ledgers.get(client)?.owns(nonce) ?? false;
     };
 
     private payload(link: Link, client: UpstreamClient, grant: Grant): StratumJob & Grant {
         const job = link.job!;
-        return { ...job, ...(client.target ? { target: client.target(job.target) } : {}), ...grant };
+        return { ...job, ...(client.target ? { target: client.target(job.target), pool_target: job.target } : {}), ...grant };
     };
 
     private async pick(client: UpstreamClient, exclude?: Link): Promise<Link> {
@@ -380,6 +362,8 @@ export class Upstream {
 
         for (const client of orphans)
             this.attach(client).then(job => client.job(job)).catch(err => client.drop(err instanceof Error ? err.message : String(err)));
+
+        if (!this.links.length && !this.live.size) this.retired?.();
     };
 
     private async migrate(from: Link, client: UpstreamClient): Promise<boolean> {
@@ -429,10 +413,15 @@ export class Upstream {
 
         for (const link of [...this.links]) {
             if (link.clients.size === 0) {
+                const last = this.links.length === 1;
+                const idle = last ? (this.options.idleTimeout ?? IDLE_POOL_MS) : IDLE_LINK_MS;
+
                 if (!link.idle_at)
                     link.idle_at = now;
-                else if (now - link.idle_at > IDLE_LINK_MS && this.links.length > 1)
+                else if (now - link.idle_at > idle) {
+                    if (last) this.log.info("no miners, disconnecting upstream", { pool: this.pool, idle: `${Math.round((now - link.idle_at) / 1000)}s` });
                     link.socket?.close();
+                };
 
                 continue;
             };
@@ -477,13 +466,18 @@ export class UpstreamRegistry {
 
     public get(pool: string, address: string, pass: string, proxy?: string): Upstream {
         const key = `${pool}|${address}|${pass}|${proxy ?? ""}`;
-        let upstream = this.pools.get(key);
+        const known = this.pools.get(key);
 
-        if (!upstream) {
-            upstream = new Upstream(pool, address, pass, { ...this.options, proxy });
-            this.pools.set(key, upstream);
-        };
+        if (known) return known;
 
+        const upstream = new Upstream(pool, address, pass, { ...this.options, proxy }, () => {
+            if (this.pools.get(key) !== upstream) return;
+
+            this.pools.delete(key);
+            upstream.close();
+        });
+
+        this.pools.set(key, upstream);
         return upstream;
     };
 

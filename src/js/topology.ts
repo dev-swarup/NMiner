@@ -68,5 +68,5 @@ export async function MaxThreads(): Promise<number> {
     if (threads > 0) return threads;
 
     const cpu = await getCpu();
-    return Math.max(1, Math.min(Math.floor(cpu.cache.l3 / 1024 / 1024 / 2), cpu.physicalCores || cpu.cores));
+    return Math.max(1, Math.min(Math.floor(cpu.cache.l3 / 1024 / 1024 / 2), cpu.cores || cpu.physicalCores));
 };

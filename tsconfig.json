@@ -18,6 +18,7 @@
         "allowSyntheticDefaultImports": true,
         "forceConsistentCasingInFileNames": true,
         "types": [
+            "bun",
             "node"
         ]
     },

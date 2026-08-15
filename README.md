@@ -5,7 +5,7 @@
 [![GitHub license](https://img.shields.io/github/license/dev-swarup/NMiner.svg)](https://github.com/dev-swarup/NMiner/blob/master/LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/dev-swarup/NMiner.svg)](https://github.com/dev-swarup/NMiner/stargazers)
 
-A high-performance, cross-platform **RandomX CPU miner shipped as a Node.js addon**, plus **NMinerProxy** — a clustered stratum proxy that terminates thousands of miners, verifies their shares, and multiplexes them onto a self-scaling pool of upstream pool connections.
+A high-performance, cross-platform **RandomX CPU miner shipped as a Node.js addon**, plus **NMinerProxy** — a clustered stratum proxy that terminates thousands of miners, accounts their shares, and multiplexes them onto a self-scaling pool of upstream pool connections.
 
 Two layers, cleanly separated:
 
@@ -44,7 +44,7 @@ RandomX is a proof-of-work algorithm optimized for general-purpose CPUs. It uses
 | **Encrypted proxy protocol** | secp256k1 ECDH handshake + ChaCha20-Poly1305 AEAD on every downstream frame |
 | **Self-clustering proxy** | Forks and supervises its own workers, distributing accepted sockets to the least-loaded one |
 | **Upstream autoscaling** | Opens, packs and consolidates pool links on demand; grants nonce ranges hashrate-proportionally |
-| **Vardiff + verification** | Per-miner difficulty from measured hashrate, with optional native re-hashing of every submitted share |
+| **Vardiff** | Per-miner difficulty from measured hashrate, settled in the worker that owns the connection |
 | **SOCKS4/5 proxy support** | For both the miner and the proxy's upstream leg |
 
 ---
@@ -156,7 +156,7 @@ new NMiner("udp://proxy.example.com:8080", "wallet");
 
 ## NMinerProxy
 
-`NMinerProxy` terminates many downstream miner connections and represents them upstream as a small number of real Stratum logins. It is not a passive relay: it slices the nonce space so no two miners overlap, assigns each miner its own difficulty, verifies shares natively before forwarding them, and absorbs everything that does not meet the pool target.
+`NMinerProxy` terminates many downstream miner connections and represents them upstream as a small number of real Stratum logins. It is not a passive relay: it slices the nonce space so no two miners overlap, assigns each miner its own difficulty, and absorbs everything that does not meet the pool target.
 
 ```ts
 new NMinerProxy(pool?: string, address?: string, options?: ProxyOptions);
@@ -179,7 +179,6 @@ flowchart TB
         HUB["PrimaryHub<br/>session registry"]
         LB["LocalBackend"]
         VD["VarDiff"]
-        VF["Verifier<br/>native re-hash"]
         UP["UpstreamRegistry<br/>autoscaled links"]
         NA["Nonce allocator"]
     end
@@ -197,17 +196,18 @@ flowchart TB
     LS -- "socket handoff<br/>least-loaded" --> W1
     LS --> W2
     UR -- "datagrams" --> W1
-    W1 -- "batched IPC" --> HUB
+    W1 -- "solutions + batched accounting" --> HUB
     W2 --> HUB
     HUB --> LB
     LB --> VD
-    LB --> VF
     LB --> UP
     UP --> NA
     UP --> POOL
 ```
 
-**Primary owns all pool state.** Workers hold none: a worker is an `Edge` (WebSocket) plus a `UdpEdge` (datagram) driving a `WorkerBackend`, which is a thin IPC forwarder for `login` / `chunk` / `submit` / `close`. That means crypto, framing, JSON and socket bookkeeping — the expensive per-miner work — scale across cores, while difficulty, nonce accounting and upstream links stay single-sourced and consistent.
+**Primary owns all pool state.** Workers hold none: a worker is an `Edge` (WebSocket) plus a `UdpEdge` (datagram) driving a `WorkerBackend`, which forwards `login` / `chunk` / `close` over IPC. That means crypto, framing, JSON and socket bookkeeping — the expensive per-miner work — scale across cores, while difficulty, nonce accounting and upstream links stay single-sourced and consistent.
+
+**Shares settle in the worker.** `submit` is the one call that does *not* round-trip. Each worker mirrors the target, the pool target and the nonce ledger it was handed for its own sessions, so it answers the miner immediately: a share below the pool target is tallied locally and shipped to the primary as a 5-second aggregate, and only a real pool-target solution is pushed across IPC. Share traffic therefore costs zero round-trips per submit no matter how many miners a worker holds.
 
 **Socket handoff, not `cluster`.** The primary listens with `pauseOnConnect` and hands the raw socket to the least-loaded child, which is a `child_process.fork` of the package's own `worker.js` — never `cluster.fork`, and never the user's entry script. NMiner therefore clusters itself correctly even when embedded in an application that is already clustered. If a foreign manager (pm2, `cluster`) is detected, every instance but the first idles with a warning, because a second live instance would mean a second upstream login and a duplicated nonce space.
 
@@ -227,7 +227,7 @@ Load balancing happens at four independent levels.
 
 **4 — Difficulty per miner.** `vardiff.ts` targets a share every ~15 s from the miner's share-based hashrate estimate, retuning only when the desired difficulty drifts by more than 1.3×. Two invariants hold: the assigned difficulty is **never** above the pool's, and the recorded difficulty is always `targetDifficulty()` of the target actually handed out — so credited work equals proven work. `floor()`/`settle()` keep the previous target valid across a retune, so shares already in flight are never rejected for a difficulty change they could not have seen.
 
-**Share path.** On `submit` the proxy checks that a job is active, the nonce is inside a range that miner owns, and (unless disabled) that the blob+nonce actually hashes to the submitted result — re-hashed natively on a dedicated `RxVerify` thread pool with its own seed-rotating dataset. Shares below the pool target are **absorbed**: accounted for the miner, never forwarded. Only real pool-target solutions travel upstream, which is what keeps upstream chatter flat as the miner count grows.
+**Share path.** On `submit` the proxy checks that a job is active, that the nonce is inside a range that miner owns, and that the submitted result meets the difficulty that miner was assigned. It does **not** re-hash the share: the proxy takes the result at its word and lets the pool be the authority on validity. Shares below the pool target are **absorbed**: accounted for the miner, never forwarded. Only real pool-target solutions travel upstream, which is what keeps upstream chatter flat as the miner count grows.
 
 ### ProxyOptions
 
@@ -242,17 +242,13 @@ interface ProxyOptions extends MinerOptions {
     maxLinks?: number;           // upstream links per pool tuple (default 64)
     expandNicehash?: boolean;    // claim unused nicehash slots   (default false)
 
-    verify?: boolean;            // native share verification     (default true)
-    verifyMode?: "FAST" | "LIGHT";
-    verifyThreads?: number;
-
     authorize?: (username: string, password: string) => boolean | Promise<boolean>;
 }
 ```
 
 `cluster` defaults to `cores <= 2 ? 0 : min(cores - 2, 8)` — two cores are left for the primary and its upstream I/O, and the ceiling of 8 reflects that batching, not worker count, is the real limit. Set `cluster: false` to run everything in one process (useful under a supervisor, or for debugging).
 
-`verify` costs a full RandomX dataset in the proxy process (2 GB in FAST mode); set `verifyMode: "LIGHT"` for 256 MB, or `verify: false` to forward on arithmetic checks alone. Verification degrades gracefully: if the dataset cannot be built three times in a row, shares forward unverified and the failure is logged rather than stalling the proxy.
+The proxy holds no RandomX dataset of its own. Shares are accepted on arithmetic checks alone — job, nonce range and assigned difficulty — and the pool is the authority on whether a forwarded solution is real, so a proxy host needs no mining-sized memory.
 
 ### Events & API
 
@@ -262,7 +258,7 @@ proxy.on("work",  (address, difficulty, forwarded, solved) => { /* every valid s
 ```
 
 ```ts
-proxy.stats();        // { accepted, rejected, absorbed, work, solved, idle, verifying,
+proxy.stats();        // { accepted, rejected, absorbed, work, solved, idle,
                       //   workers: [{ id, load, uptime }],
                       //   miners:  [{ address, hashrate, difficulty, shares, work, solved }],
                       //   pools:   [{ pool, miners, links: [{ miners, slot, interval, worst,
@@ -278,7 +274,6 @@ Gate logins with `authorize`; throwing or returning `false` rejects the miner be
 const proxy = new NMinerProxy("stratum+tcp://pool.example.com:3333", "wallet", "x", {
     port: 4444,
     cluster: 4,
-    verifyMode: "LIGHT",
     authorize: async (username, password) => await db.workerExists(username, password)
 });
 
@@ -332,7 +327,7 @@ from a live hwloc scan, sums the result across nodes, and splits it evenly with 
 | Mode | Resident | Use |
 |---|---|---|
 | `FAST` | ~2080 MB dataset **per NUMA node**, plus scratchpads | Maximum hashrate |
-| `LIGHT` | 256 MB cache, plus scratchpads | Low-memory hosts, verification, many-instance boxes |
+| `LIGHT` | 256 MB cache, plus scratchpads | Low-memory hosts, many-instance boxes |
 
 Huge pages are probed at startup and enabled where possible — `SeLockMemoryPrivilege` is granted to the current user on Windows (a re-login is reported when a restart is required), `/proc/sys/vm/nr_hugepages` is raised on Linux. This is one of the largest single hashrate factors on most CPUs; `PrintTopology` reports the outcome as *permission granted* / *restart required* / *not supported*.
 
@@ -348,10 +343,12 @@ Huge pages are probed at startup and enabled where possible — `SeLockMemoryPri
 ### Proxy throughput
 
 * **Per-miner cost scales across cores.** Crypto, framing and socket handling live in workers; the primary only touches accounting-sized messages.
+* **Shares never round-trip.** A worker answers `submit` from its own mirror of the target and nonce ledger; absorbed shares reach the primary as one aggregate per session per 5 s, and only pool-target solutions cross IPC at all.
 * **IPC is amortized.** Batched on `setImmediate`, so a new job reaching *N* sessions is a small constant number of writes per worker, not *N*.
+* **Target math is memoized.** Hex targets decode to their 64-bit value and difficulty once and are cached, so the per-share path is a BigInt comparison rather than a buffer parse and a division.
+* **Timers are swept, not churned.** Idle miners are reaped by one periodic sweep per edge instead of a timer reset on every frame.
 * **Upstream chatter stays flat.** Absorbed shares (below pool target) never leave the process; only real solutions are forwarded, and the upstream link count tracks aggregate hashrate rather than miner count.
 * **Nonce grants are demand-sized.** Chunks are cut to about 20 s of the miner's measured work, bounded by the job deadline, so a fast miner makes one request where a fixed-size allocator would make dozens.
-* **Verification is off the event loop.** `RxVerify` re-hashes on its own native thread pool and returns a promise; the seed rotates in the background as the network moves to a new epoch.
 
 `stats()` is the instrument for all of this — per-worker load, per-miner hashrate and difficulty, and per-link capacity/load/space-remaining.
 
@@ -372,7 +369,7 @@ type Kind  = "error" | "warn" | "info" | "success" | "debug";
 interface Entry {
     time: number;                        // epoch ms
     kind: Kind;                          // "success" is an info-level accent, not its own level
-    scope: string;                       // program, net, pool, cpu, randomx, share, verify, udp, fleet, proxy
+    scope: string;                       // program, net, pool, cpu, randomx, share, udp, fleet, proxy
     message: string;
     fields?: { [key: string]: unknown };
 }

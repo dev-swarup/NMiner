@@ -8,6 +8,7 @@ import { LogLike, Logger, asLogger } from "./logger.js";
 import { Backend, Session, invoke, nextSession } from "./hub.js";
 import { Datagram, HELLO, WELCOME, RESET, MAX_PAYLOAD, PEER_TIMEOUT } from "./udp.js";
 
+const MAX_FRAME = 64 * 1024;
 export const MINER_TIMEOUT = 5 * 60000;
 
 export interface EdgeOptions {
@@ -20,15 +21,21 @@ export class Edge {
     private wss: WebSocketServer;
     private log: Logger;
 
+    private sweeper: NodeJS.Timeout;
+    private clients: Map<WebSocket, { seen: number }> = new Map();
+
     constructor(private backend: Backend, private options: EdgeOptions = {}) {
         this.log = asLogger(options.log, "net");
 
-        this.server = http.createServer((req, res) => {
+        this.sweeper = setInterval(() => this.sweep(), 30000);
+        this.sweeper.unref?.();
+
+        this.server = http.createServer((_, res) => {
             res.writeHead(404);
             res.end();
         });
 
-        this.wss = new WebSocketServer({ noServer: true });
+        this.wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME, perMessageDeflate: false, skipUTF8Validation: true });
 
         this.server.on("upgrade", (req, socket, head) => {
             const publicHash = req.headers["x-salt"];
@@ -74,8 +81,16 @@ export class Edge {
     };
 
     public close(): void {
+        clearInterval(this.sweeper);
+        for (const ws of [...this.clients.keys()]) ws.close();
+
         this.wss.close();
         this.server.close();
+    };
+
+    private sweep(): void {
+        const cutoff = Date.now() - MINER_TIMEOUT;
+        for (const [ws, state] of this.clients) if (state.seen < cutoff) ws.close();
     };
 
     private serve(ws: WebSocket, req: http.IncomingMessage): void {
@@ -90,18 +105,14 @@ export class Edge {
         };
 
         let logged = false;
-        let timeout = setTimeout(() => ws.close(), MINER_TIMEOUT);
+        const state = { seen: Date.now() };
 
-        const bump = () => {
-            clearTimeout(timeout);
-            timeout = setTimeout(() => ws.close(), MINER_TIMEOUT);
-        };
-
+        this.clients.set(ws, state);
         this.log.debug("miner connected", { session: session.id, transport: "ws" });
 
         ws.on("error", () => ws.close());
         ws.on("close", () => {
-            clearTimeout(timeout);
+            this.clients.delete(ws);
             this.backend.close(session);
 
             this.log.debug("miner disconnected", { session: session.id, transport: "ws" });
@@ -109,7 +120,7 @@ export class Edge {
 
         ws.on("message", async (data: Buffer) => {
             let id: any = null;
-            bump();
+            state.seen = Date.now();
 
             try {
                 const [rpc, method, params] = crypto.decrypt(secret, data.toString());
@@ -259,7 +270,11 @@ export class UdpEdge {
 
     private sweep(): void {
         const cutoff = Date.now() - PEER_TIMEOUT;
-        for (const [key, peer] of [...this.peers]) if (peer.seen < cutoff) this.drop(key);
+
+        let stale: string[] | null = null;
+        for (const [key, peer] of this.peers) if (peer.seen < cutoff) (stale ??= []).push(key);
+
+        if (stale) for (const key of stale) this.drop(key);
     };
 };
 

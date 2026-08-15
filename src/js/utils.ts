@@ -1,4 +1,8 @@
 type EventMap = Record<string, any[]>;
+
+const NOOP = (): void => { };
+const DONE: Promise<void> = Promise.resolve();
+
 export class EventEmitter<Events extends EventMap> {
     private listeners: { [key: string]: Array<(...args: any[]) => void | Promise<void>> } = Object.create(null);
 
@@ -31,12 +35,20 @@ export class EventEmitter<Events extends EventMap> {
         return this;
     };
 
-    public async emit<K extends keyof Events>(event: K, ...args: Events[K]): Promise<void> {
-        const k = event as string;
-        const list = this.listeners[k];
-        if (!list || list.length === 0) return;
+    public emit<K extends keyof Events>(event: K, ...args: Events[K]): Promise<void> {
+        const list = this.listeners[event as string];
+        if (!list || list.length === 0) return DONE;
 
-        await Promise.all(list.map(l => l(...args)));
+        let waits: Array<Promise<void>> | null = null;
+
+        for (const listener of list.length === 1 ? list : [...list]) {
+            let result: void | Promise<void>;
+
+            try { result = listener(...args); } catch { continue; };
+            if (result) (waits ??= []).push(result.then(NOOP, NOOP));
+        };
+
+        return waits ? Promise.all(waits).then(NOOP) : DONE;
     };
 
     public once<K extends keyof Events>(event: K, listener: (...args: Events[K]) => void | Promise<void>): this {

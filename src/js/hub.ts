@@ -1,8 +1,8 @@
+import { Ledger } from "./nonce.js";
 import { StratumJob } from "./connect.js";
-import { Logger, asLogger } from "./logger.js";
 import { Channel, workerLink } from "./fleet.js";
+import { LogLike, Logger, asLogger } from "./logger.js";
 import { VarDiff, hashValue, meetsValue, valueDifficulty, targetDifficulty } from "./vardiff.js";
-import { Verifier, VerifierOptions, VERIFY_MATCHED, VERIFY_SKIPPED } from "./verifier.js";
 import { Upstream, UpstreamClient, UpstreamOptions, UpstreamRegistry } from "./upstream.js";
 
 export interface Session {
@@ -17,6 +17,7 @@ export interface Backend {
     chunk(session: Session, job_id: string, hashrate?: number): Promise<any>;
     login(session: Session, address: string, pass: string, threads?: number): Promise<any>;
     submit(session: Session, job_id: string, nonce: string, result: string): Promise<any>;
+    account?(session: Session, shares: number, work: number, actual: number): void;
 };
 
 let sequence = 0;
@@ -55,18 +56,23 @@ type Entry = { client: UpstreamClient, upstream: Upstream, address: string, peer
 
 export class LocalBackend implements Backend {
     private log: Logger;
-    private verifier: Verifier | null;
     private registry: UpstreamRegistry;
     private entries: Map<Session, Entry> = new Map();
 
-    constructor(private resolve: Resolver, private sink: ShareSink, options: UpstreamOptions, verify?: VerifierOptions | false) {
+    constructor(private resolve: Resolver, private sink: ShareSink, options: UpstreamOptions) {
         this.log = asLogger(options.log, "share");
         this.registry = new UpstreamRegistry(options);
-        this.verifier = verify === false || verify === undefined ? null : new Verifier(verify);
     };
 
+    public get size(): number { return this.entries.size; };
     public get pools(): Upstream[] { return this.registry.all(); };
-    public get verifying(): boolean { return this.verifier !== null && this.verifier.ready; };
+
+    public summary(): { miners: number, hashrate: number } {
+        let hashrate = 0;
+        for (const entry of this.entries.values()) hashrate += entry.vardiff.hashrate;
+
+        return { miners: this.entries.size, hashrate };
+    };
 
     public async login(session: Session, address: string, pass: string, threads?: number): Promise<StratumJob> {
         this.close(session);
@@ -77,10 +83,7 @@ export class LocalBackend implements Backend {
 
         const client: UpstreamClient = {
             hashrate: vardiff.hashrate,
-            job: payload => {
-                if (payload.seed_hash) this.verifier?.sync(payload.seed_hash);
-                session.push(payload);
-            },
+            job: payload => session.push(payload),
             drop: message => session.kill(message),
             target: pool => vardiff.tune(pool)
         };
@@ -105,8 +108,19 @@ export class LocalBackend implements Backend {
         const entry = this.entries.get(session);
         if (!entry) throw new Error("Not logged in.");
 
-        if (typeof hashrate === "number") entry.upstream.report(entry.client, hashrate);
-        return entry.upstream.chunk(entry.client, job_id);
+        if (typeof hashrate === "number" && hashrate > 0) {
+            entry.vardiff.observe(hashrate);
+            entry.upstream.report(entry.client, hashrate);
+        };
+
+        const reply = await entry.upstream.chunk(entry.client, job_id);
+        if (!("start_nonce" in reply)) return reply;
+
+        const job = entry.upstream.jobOf(entry.client);
+        if (!job) return reply;
+
+        const before = entry.vardiff.target;
+        return entry.vardiff.tune(job.target) === before ? reply : { ...job, ...reply, target: entry.vardiff.target, pool_target: job.target };
     };
 
     public async submit(session: Session, job_id: string, nonce: string, result: string): Promise<any> {
@@ -127,18 +141,17 @@ export class LocalBackend implements Backend {
         if (!entry.upstream.owns(entry.client, claimed.readUInt32LE(0))) deny("Nonce outside your assigned range.");
 
         const issue = entry.vardiff.floor(), value = hashValue(result);
-
-        const flags = this.verifier ? await this.verifier.check(job.blob, nonce, result, issue.target, job.target, job.seed_hash) : VERIFY_SKIPPED;
-        if (!(flags & VERIFY_SKIPPED) && !(flags & VERIFY_MATCHED)) deny("Share does not hash to the submitted result.");
-
         if (!meetsValue(value, issue.target)) deny("Share is below your assigned difficulty.");
 
-        if (issue.target === entry.vardiff.target || meetsValue(value, entry.vardiff.target)) entry.vardiff.settle();
+        const settled = issue.target === entry.vardiff.target || meetsValue(value, entry.vardiff.target);
+        if (settled) entry.vardiff.settle();
 
-        entry.vardiff.submitted(issue.difficulty);
-        entry.upstream.report(entry.client, entry.vardiff.hashrate);
+        const difficulty = settled && entry.vardiff.difficulty > issue.difficulty ? entry.vardiff.difficulty : issue.difficulty;
 
-        const report = { address: entry.address, target: job.target, height: job.height, elapsed: started, difficulty: issue.difficulty, actual: valueDifficulty(value) };
+        entry.vardiff.submitted(difficulty);
+        if (!entry.vardiff.told) entry.upstream.report(entry.client, entry.vardiff.hashrate);
+
+        const report = { address: entry.address, target: job.target, height: job.height, elapsed: started, difficulty, actual: valueDifficulty(value) };
 
         if (!meetsValue(value, job.target)) {
             this.sink({ ...report, accepted: true, forwarded: false, solved: 0 });
@@ -161,6 +174,20 @@ export class LocalBackend implements Backend {
         };
     };
 
+    public account(session: Session, shares: number, work: number, actual: number): void {
+        const entry = this.entries.get(session);
+        if (!entry || !(shares > 0)) return;
+
+        const job = entry.upstream.jobOf(entry.client);
+        const difficulty = Math.round(work / shares);
+        const report: ShareReport = { address: entry.address, target: job?.target ?? entry.vardiff.target, height: job?.height, elapsed: Date.now(), difficulty, actual: Math.round(actual / shares), accepted: true, forwarded: false, solved: 0 };
+
+        entry.vardiff.submitted(difficulty, shares);
+        for (let i = 0; i < shares; i++) this.sink(report);
+
+        if (!entry.vardiff.told) entry.upstream.report(entry.client, entry.vardiff.hashrate);
+    };
+
     public reset(message: string): void {
         for (const session of [...this.entries.keys()]) {
             this.close(session);
@@ -179,8 +206,6 @@ export class LocalBackend implements Backend {
     public shutdown(): void {
         this.entries.clear();
         this.registry.close();
-
-        this.verifier?.stop();
     };
 
     public accounting(): Array<{ address: string, peer: string, hashrate: number, difficulty: number, shares: number, work: number, solved: number }> {
@@ -195,13 +220,27 @@ export class LocalBackend implements Backend {
     };
 };
 
+const ACCOUNT_MS = 5000;
+const CALL_TIMEOUT = 45000;
+const EXPIRE_EVERY = 5000;
+
+type Tally = { shares: number, work: number, actual: number };
+type Known = { job_id: string, pool: string, target: string, prior: string, diff: number, older: number, ledger: Ledger };
+
 export class WorkerBackend implements Backend {
     private seq: number = 1;
+    private log: Logger;
     private link = workerLink();
+    private flusher?: NodeJS.Timeout;
+    private expirer?: NodeJS.Timeout;
+    private jobs: Map<number, Known> = new Map();
+    private tallies: Map<number, Tally> = new Map();
     private sessions: Map<number, Session> = new Map();
-    private pending: Map<number, { resolve: Function, reject: Function, timeout: NodeJS.Timeout }> = new Map();
+    private pending: Map<number, { resolve: Function, reject: Function, deadline: number }> = new Map();
 
-    constructor() {
+    constructor(log?: LogLike) {
+        this.log = asLogger(log, "share");
+
         this.link.on((raw: any) => {
             if (!raw || typeof raw.t !== "string") return;
 
@@ -210,11 +249,13 @@ export class WorkerBackend implements Backend {
                 if (!call) return;
 
                 this.pending.delete(raw.i);
-                clearTimeout(call.timeout);
 
                 if (raw.e)
                     call.reject(new Error(raw.e));
-                else call.resolve(raw.d);
+                else {
+                    this.learn(raw.c, raw.d);
+                    call.resolve(raw.d);
+                };
 
                 return;
             };
@@ -222,18 +263,15 @@ export class WorkerBackend implements Backend {
             const session = this.sessions.get(raw.c);
             if (!session) return;
 
-            if (raw.t === "j")
+            if (raw.t === "j") {
+                this.learn(raw.c, raw.d);
                 session.push(raw.d);
-            else if (raw.t === "k")
+            } else if (raw.t === "k")
                 session.kill(raw.e || "Disconnected by proxy.");
         });
 
         process.on("disconnect", () => {
-            for (const call of this.pending.values()) {
-                clearTimeout(call.timeout);
-                call.reject(new Error("Proxy primary disconnected."));
-            };
-
+            for (const call of this.pending.values()) call.reject(new Error("Proxy primary disconnected."));
             this.pending.clear();
         });
     };
@@ -247,12 +285,87 @@ export class WorkerBackend implements Backend {
         return this.call(session, "chunk", { j: job_id, h: hashrate });
     };
 
-    public submit(session: Session, job_id: string, nonce: string, result: string): Promise<any> {
-        return this.call(session, "submit", { j: job_id, n: nonce, r: result });
+    public async submit(session: Session, job_id: string, nonce: string, result: string): Promise<any> {
+        const known = this.jobs.get(session.id);
+        const claimed = Buffer.from(nonce, "hex");
+
+        if (!known || !known.target || !known.pool || known.job_id !== job_id || claimed.length < 4 || !known.ledger.owns(claimed.readUInt32LE(0)))
+            return this.call(session, "submit", { j: job_id, n: nonce, r: result });
+
+        const floor = known.prior && known.older < known.diff ? { target: known.prior, difficulty: known.older } : { target: known.target, difficulty: known.diff };
+        const value = hashValue(result);
+
+        if (!meetsValue(value, floor.target)) {
+            this.log.debug("share below assigned difficulty", { session: session.id, job: job_id });
+            throw new Error("Share is below your assigned difficulty.");
+        };
+
+        const current = meetsValue(value, known.target);
+        if (known.prior && current) known.prior = "";
+
+        if (meetsValue(value, known.pool))
+            this.link.send({ t: "sub", c: session.id, j: job_id, n: nonce, r: result });
+        else
+            this.tally(session.id, current && known.diff > floor.difficulty ? known.diff : floor.difficulty, valueDifficulty(value));
+
+        return { status: "OK" };
+    };
+
+    private tally(id: number, difficulty: number, actual: number): void {
+        let sum = this.tallies.get(id);
+        if (!sum) this.tallies.set(id, sum = { shares: 0, work: 0, actual: 0 });
+
+        sum.shares++;
+        sum.work += difficulty;
+        sum.actual += actual;
+
+        if (this.flusher) return;
+
+        this.flusher = setTimeout(() => this.flush(), ACCOUNT_MS);
+        this.flusher.unref?.();
+    };
+
+    private flush(): void {
+        if (this.flusher) clearTimeout(this.flusher);
+        this.flusher = undefined;
+
+        if (!this.tallies.size) return;
+
+        const d = [...this.tallies].map(([id, sum]) => [id, sum.shares, sum.work, sum.actual]);
+
+        this.tallies.clear();
+        this.link.send({ t: "acc", d });
+    };
+
+    private learn(id: number, payload: any): void {
+        if (!payload || typeof payload !== "object") return;
+
+        let known = this.jobs.get(id);
+        if (!known) this.jobs.set(id, known = { job_id: "", pool: "", target: "", prior: "", diff: 0, older: 0, ledger: new Ledger() });
+
+        if (typeof payload.blob === "string" && typeof payload.job_id === "string") {
+            known.job_id = payload.job_id;
+            known.pool = payload.pool_target ?? known.pool;
+
+            if (typeof payload.target === "string" && payload.target !== known.target) {
+                known.prior = known.target;
+                known.older = known.diff;
+
+                known.target = payload.target;
+                known.diff = targetDifficulty(payload.target);
+            };
+        };
+
+        if (typeof payload.start_nonce === "number" && known.job_id)
+            known.ledger.record(known.job_id, { start_nonce: payload.start_nonce, nonce_limit: payload.nonce_limit ?? 0xFFFFFFFF });
     };
 
     public close(session: Session): void {
+        if (this.tallies.has(session.id)) this.flush();
+
+        this.jobs.delete(session.id);
         this.sessions.delete(session.id);
+
         this.link.send({ t: "bye", c: session.id });
     };
 
@@ -260,49 +373,88 @@ export class WorkerBackend implements Backend {
         if (!process.connected) return Promise.reject(new Error("Proxy primary disconnected."));
 
         return new Promise((resolve, reject) => {
-            const i = this.seq++, timeout = setTimeout(() => {
-                if (this.pending.delete(i)) reject(new Error("Proxy primary did not answer in time."));
-            }, 45000);
+            const i = this.seq++;
 
-            this.pending.set(i, { resolve, reject, timeout });
+            this.pending.set(i, { resolve, reject, deadline: Date.now() + CALL_TIMEOUT });
             this.link.send({ t, c: session.id, i, ...payload });
+
+            if (this.expirer) return;
+
+            this.expirer = setInterval(() => this.expire(), EXPIRE_EVERY);
+            this.expirer.unref?.();
         });
+    };
+
+    private expire(): void {
+        const now = Date.now();
+
+        for (const [i, call] of this.pending) {
+            if (call.deadline > now) continue;
+
+            this.pending.delete(i);
+            call.reject(new Error("Proxy primary did not answer in time."));
+        };
+
+        if (this.pending.size || !this.expirer) return;
+
+        clearInterval(this.expirer);
+        this.expirer = undefined;
     };
 };
 
 export class PrimaryHub {
-    private sessions: Map<string, Session> = new Map();
+    private channels: Map<number, Map<number, Session>> = new Map();
 
     constructor(private backend: Backend) { };
 
     public message(channel: Channel, raw: any): void { this.handle(channel, raw).catch(() => { }); };
 
     public evict(id: number): void {
-        const prefix = `${id}:`;
+        const sessions = this.channels.get(id);
+        if (!sessions) return;
 
-        for (const [key, session] of [...this.sessions]) {
-            if (!key.startsWith(prefix)) continue;
-
-            this.sessions.delete(key);
-            this.backend.close(session);
-        };
+        this.channels.delete(id);
+        for (const session of sessions.values()) this.backend.close(session);
     };
 
     private async handle(channel: Channel, raw: any): Promise<void> {
-        if (!raw || typeof raw.t !== "string" || typeof raw.c !== "number") return;
-        const key = `${channel.id}:${raw.c}`;
+        if (!raw || typeof raw.t !== "string") return;
+
+        let sessions = this.channels.get(channel.id);
+
+        if (raw.t === "acc") {
+            if (!Array.isArray(raw.d) || !sessions || !this.backend.account) return;
+
+            for (const [id, shares, work, actual] of raw.d) {
+                const session = sessions.get(id);
+                if (session) this.backend.account(session, shares, work, actual);
+            };
+
+            return;
+        };
+
+        if (typeof raw.c !== "number") return;
 
         if (raw.t === "bye") {
-            const session = this.sessions.get(key);
+            const session = sessions?.get(raw.c);
             if (!session) return;
 
-            this.sessions.delete(key);
+            sessions!.delete(raw.c);
             this.backend.close(session);
 
             return;
         };
 
-        let session = this.sessions.get(key);
+        if (raw.t === "sub") {
+            const session = sessions?.get(raw.c);
+            if (session) await this.backend.submit(session, raw.j, raw.n, raw.r);
+
+            return;
+        };
+
+        if (!sessions) this.channels.set(channel.id, sessions = new Map());
+
+        let session = sessions.get(raw.c);
         if (!session) {
             const id = raw.c;
 
@@ -312,7 +464,7 @@ export class PrimaryHub {
                 kill: message => channel.send({ t: "k", c: id, e: message })
             };
 
-            this.sessions.set(key, session);
+            sessions.set(raw.c, session);
         };
 
         if (typeof raw.w === "string") session.peer = raw.w;

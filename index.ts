@@ -1,6 +1,6 @@
 import os from "os";
 import { version } from "./package.json";
-import { Level, Logger, Sink, createLogger, ms, row, GRAY, RED, GREEN, WHITE, WHITE_BOLD, CYAN_BOLD } from "./src/js/logger.js";
+import { Level, Logger, Sink, createLogger, ms, row, GRAY, WHITE, WHITE_BOLD, CYAN_BOLD } from "./src/js/logger.js";
 
 import { PrintTopology, MaxThreads, getNumaNodes } from "./src/js/topology.js";
 import { connect, ALGORITHMS, StratumClient, StratumJob } from "./src/js/connect.js";
@@ -8,7 +8,7 @@ import { Rx, RxJob, RxVariant, JobResult, cacheInfo, recommendedThreads } from "
 
 export type { Level, Logger, Sink, Entry } from "./src/js/logger.js";
 
-const PrintDiff = (i: number) => i >= 100000000 ? `${Math.round(i / 1000000)}M` : i;
+const PrintDiff = (i: number): string => i >= 1e8 ? `${Math.round(i / 1e6)}M` : i >= 1e6 ? `${(i / 1e6).toFixed(1)}M` : i >= 1e5 ? `${Math.round(i / 1e3)}K` : String(i);
 const PrintHashes = (i: number | null) => i === null ? "n/a" : i.toFixed(1);
 
 const PoolHost = (url: string): string => { try { return new URL(url).host; } catch { return url; }; };
@@ -61,6 +61,7 @@ export class NMiner {
     private requesting_chunk: boolean = false;
     private chunk_backoff: number = 0;
     private chunk_rate: number = 0;
+    private chunk_told: number = 0;
     private chunk_meter?: { time: number, hashes: number };
 
     private chunk_gen: number = 0;
@@ -85,14 +86,17 @@ export class NMiner {
                 };
 
                 this.chunk_meter = { time: now, hashes };
-                if (now >= this.chunk_backoff && this.rx_job.pending_nonces() < Math.max(this.chunk_rate * 10, 4096)) {
+                if (now >= this.chunk_backoff && ((this.chunk_rate > 0 && now - this.chunk_told >= 15000) || this.rx_job.pending_nonces() < Math.max(this.chunk_rate * 10, 4096))) {
+                    this.chunk_told = now;
                     this.requesting_chunk = true;
 
                     try {
                         const chunk: any = await this.stratum.send("get_chunk", { job_id: this.m_job.job_id, hashrate: Math.round(this.chunk_rate) });
                         if (gen !== this.chunk_gen) return;
 
-                        if (chunk && chunk.start_nonce != null)
+                        if (chunk && chunk.blob)
+                            await this.on_job(chunk);
+                        else if (chunk && chunk.start_nonce != null)
                             this.rx_job.queue_range(chunk.start_nonce, chunk.nonce_limit ?? 0xFFFFFFFF);
                         else if (chunk && typeof chunk.retry_after === "number")
                             this.chunk_backoff = Date.now() + Math.min(30000, Math.max(250, chunk.retry_after));
@@ -111,6 +115,7 @@ export class NMiner {
 
     private stop_chunk_poll() {
         this.chunk_gen++;
+        this.chunk_told = 0;
         this.chunk_backoff = 0;
         this.chunk_meter = undefined;
 
@@ -379,20 +384,18 @@ export class NMiner {
 };
 
 import { EventEmitter } from "./src/js/utils.js";
+import { IDLE_POOL_MS } from "./src/js/upstream.js";
 import { Edge, UdpRouter, probeReusePort } from "./src/js/edge.js";
 import { Fleet, FleetChild, autoWorkers, foreignCluster } from "./src/js/fleet.js";
-import { Backend, Credentials, LocalBackend, PrimaryHub, ShareReport } from "./src/js/hub.js";
+import { Credentials, LocalBackend, PrimaryHub, ShareReport } from "./src/js/hub.js";
 
 export interface ProxyOptions extends MinerOptions {
     port?: number;
     udpPort?: number;
     maxLinks?: number;
+    idleTimeout?: number;
     cluster?: boolean | number;
     expandNicehash?: boolean;
-
-    verify?: boolean;
-    verifyMode?: mode;
-    verifyThreads?: number;
 
     authorize?: (username: string, password: string) => boolean | Promise<boolean>;
 };
@@ -411,7 +414,6 @@ export class NMinerProxy extends EventEmitter<{
 
     private hub?: PrimaryHub;
     private local?: LocalBackend;
-    private backend!: Backend;
 
     private edge?: Edge;
     private fleet?: Fleet;
@@ -453,14 +455,16 @@ export class NMinerProxy extends EventEmitter<{
 
         if (foreign) this.log.warn("foreign process manager detected, NMiner manages its own workers — keep instances at 1", { manager: foreign.manager });
 
-        this.local = this.create_backend();
-        this.backend = this.local;
-
         const workers = this.worker_count();
 
+        this.local = this.create_backend();
         this.banner(workers);
+
         this.ticker = setInterval(() => this.status(), 60000);
         this.ticker.unref?.();
+
+        this.sweeper = setInterval(() => this.sweep(), Math.max(1000, Math.min(15000, (this.options.idleTimeout ?? IDLE_POOL_MS) / 2)));
+        this.sweeper.unref?.();
 
         if (workers > 0) {
             this.hub = new PrimaryHub(this.local);
@@ -468,14 +472,15 @@ export class NMinerProxy extends EventEmitter<{
             this.fleet.listen(this.options.port ?? 8080);
 
             if (this.options.udpPort) this.spread_udp(this.options.udpPort, workers).catch(err => this.log.error(err, { port: this.options.udpPort }));
+
             return;
         };
 
-        this.edge = new Edge(this.backend, { port: this.options.port, log: this.log });
+        this.edge = new Edge(this.local, { port: this.options.port, log: this.log });
         this.edge.listen();
 
         if (this.options.udpPort) {
-            this.udp = new UdpRouter(this.options.udpPort, { log: this.log }, undefined, this.backend);
+            this.udp = new UdpRouter(this.options.udpPort, { log: this.log }, undefined, this.local);
             this.udp.listen();
         };
     };
@@ -505,8 +510,23 @@ export class NMinerProxy extends EventEmitter<{
     };
 
     private peak: number = 0;
+    private idle_at: number = 0;
     private ticker?: NodeJS.Timeout;
+    private sweeper?: NodeJS.Timeout;
     private seen: { accepted: number, miners: number } = { accepted: 0, miners: 0 };
+
+    private sweep(): void {
+        if ((this.local?.size ?? 0) > 0) { this.idle_at = 0; return; };
+
+        if (!this.idle_at) { this.idle_at = Date.now(); return; };
+        if (Date.now() - this.idle_at <= (this.options.idleTimeout ?? IDLE_POOL_MS)) return;
+        if (!(this.work || this.solved || this.accepted || this.rejected || this.absorbed || this.peak)) return;
+
+        this.log.info("idle, clearing session stats", { accepted: this.accepted, rejected: this.rejected, absorbed: this.absorbed, solved: PrintDiff(this.solved) });
+
+        this.work = this.solved = this.accepted = this.rejected = this.absorbed = this.peak = 0;
+        this.seen = { accepted: 0, miners: 0 };
+    };
 
     private banner(workers: number): void {
         if (!this.log.allows("info")) return;
@@ -520,8 +540,7 @@ export class NMinerProxy extends EventEmitter<{
             ["POOL #1", `${CYAN_BOLD(PoolHost(this.pool))} ${GRAY("algo")} ${WHITE_BOLD(String(this.options.algo))}`],
             ["BIND #1", `${CYAN_BOLD(`0.0.0.0:${this.options.port ?? 8080}`)} ${GRAY("ws")}`],
             ...(this.options.udpPort ? [["BIND #2", `${CYAN_BOLD(`0.0.0.0:${this.options.udpPort}`)} ${GRAY("udp")}`] as [string, string]] : []),
-            ["WORKERS", workers > 0 ? WHITE_BOLD(String(workers)) : GRAY("single process")],
-            ["VERIFY", this.options.verify === false ? RED("disabled") : GREEN("enabled")]
+            ["WORKERS", workers > 0 ? WHITE_BOLD(String(workers)) : GRAY("single process")]
         ];
 
         for (const [label, value] of rows) process.stdout.write(`${row(label, value)}\n`);
@@ -529,10 +548,10 @@ export class NMinerProxy extends EventEmitter<{
     };
 
     private status(): void {
-        const stats = this.stats(), miners = stats.miners.length;
+        const { miners, hashrate: rate } = this.local?.summary() ?? { miners: 0, hashrate: 0 };
 
-        const rate = stats.miners.reduce((total, miner) => total + miner.hashrate, 0);
-        const links = stats.pools.reduce((total, upstream) => total + upstream.links.length, 0);
+        let links = 0;
+        for (const upstream of this.local?.pools ?? []) links += upstream.connections;
 
         if (miners > this.peak) this.peak = miners;
         const moved = miners - this.seen.miners;
@@ -555,7 +574,7 @@ export class NMinerProxy extends EventEmitter<{
 
         const pair = (label: string, value: unknown) => `${GRAY(`${label}:`)} ${WHITE_BOLD(String(value))}`;
 
-        process.stdout.write(`${row("upstreams", `${pair("active", links)}  ${pair("pools", stats.pools.length)}  ${pair("verifying", stats.verifying)}`)}\n`);
+        process.stdout.write(`${row("upstreams", `${pair("active", links)}  ${pair("pools", stats.pools.length)}`)}\n`);
         process.stdout.write(`${row("miners", `${pair("active", miners.length)}  ${pair("max", this.peak)}  ${pair("ratio", `1:${(miners.length / Math.max(1, links)).toFixed(1)}`)}`)}\n`);
 
         const columns: Array<[string, number, (m: typeof miners[number]) => string]> = [
@@ -582,7 +601,6 @@ export class NMinerProxy extends EventEmitter<{
             accepted: this.accepted,
             rejected: this.rejected,
             absorbed: this.absorbed,
-            verifying: this.local?.verifying ?? false,
             workers: this.fleet?.stats() ?? [], miners: this.local?.accounting() ?? [],
             pools: (this.local?.pools ?? []).map(upstream => ({ pool: upstream.pool, miners: upstream.size, links: upstream.stats() }))
         };
@@ -601,7 +619,9 @@ export class NMinerProxy extends EventEmitter<{
 
     public close(): void {
         this.stopped = true;
+
         if (this.ticker) clearInterval(this.ticker);
+        if (this.sweeper) clearInterval(this.sweeper);
         this.log.info("shutting down", { accepted: this.accepted, rejected: this.rejected, absorbed: this.absorbed, solved: PrintDiff(this.solved) });
 
         this.edge?.close();
@@ -633,7 +653,9 @@ export class NMinerProxy extends EventEmitter<{
 
             if (!share.forwarded) {
                 this.absorbed++;
-                return void this.share.debug("absorbed", { diff: share.difficulty, actual: PrintDiff(share.actual), absorbed: this.absorbed, took: ms(share.elapsed) });
+
+                if (this.share.allows("debug")) this.share.debug("absorbed", { diff: share.difficulty, actual: PrintDiff(share.actual), absorbed: this.absorbed, took: ms(share.elapsed) });
+                return;
             };
 
             if (share.accepted) {
@@ -654,7 +676,8 @@ export class NMinerProxy extends EventEmitter<{
             maxLinks: this.options.maxLinks,
             keepalive: this.options.keepalive,
             strictTls: this.options.strictTls,
+            idleTimeout: this.options.idleTimeout,
             expandNicehash: this.options.expandNicehash
-        }, this.options.verify === false ? false : { mode: this.options.verifyMode ?? "FAST", algo: this.options.algo, threads: this.options.verifyThreads, log: this.log });
+        });
     };
 };

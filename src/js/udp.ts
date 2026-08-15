@@ -12,54 +12,67 @@ export const PEER_TIMEOUT = 5 * 60000;
 
 const RETRIES = 5;
 const RETRY_MS = 700;
+const SWEEP_MS = 250;
 const SEEN_WINDOW = 256;
+
+const waiting: Set<Datagram> = new Set();
+let sweeper: NodeJS.Timeout | null = null;
+
+function retransmit(): void {
+    const now = Date.now();
+    for (const link of waiting) link.resend(now);
+
+    if (waiting.size || !sweeper) return;
+
+    clearInterval(sweeper);
+    sweeper = null;
+};
 
 export class Datagram {
     private seq: number = 0;
     private at: number = 0;
     private seen: Set<number> = new Set();
     private ring: number[] = new Array(SEEN_WINDOW).fill(-1);
-    private outbox: Map<number, { text: string, tries: number, timer: NodeJS.Timeout }> = new Map();
+    private outbox: Map<number, { text: string, tries: number, due: number }> = new Map();
 
     constructor(private write: (text: string) => void, private deliver: (payload: string) => void, private dead: () => void) {
 
     };
 
-    public get inflight(): number { return this.outbox.size; };
-
     public send(payload: string): void {
         const seq = ++this.seq, text = `${DATA}${seq.toString(36)}:${payload}`;
-        const entry = { text, tries: 0, timer: null as any };
 
-        this.outbox.set(seq, entry);
+        this.outbox.set(seq, { text, tries: 1, due: Date.now() + RETRY_MS });
+        this.write(text);
 
-        const retry = () => {
-            if (!this.outbox.has(seq)) return;
+        waiting.add(this);
+        if (sweeper) return;
+
+        sweeper = setInterval(retransmit, SWEEP_MS);
+        sweeper.unref?.();
+    };
+
+    public resend(now: number): void {
+        for (const [seq, entry] of this.outbox) {
+            if (entry.due > now) continue;
 
             if (++entry.tries > RETRIES) {
                 this.outbox.delete(seq);
+                waiting.delete(this);
+
                 return this.dead();
             };
 
-            this.write(text);
-
-            entry.timer = setTimeout(retry, RETRY_MS);
-            entry.timer.unref?.();
+            entry.due = now + RETRY_MS;
+            this.write(entry.text);
         };
 
-        retry();
+        if (!this.outbox.size) waiting.delete(this);
     };
 
     public receive(text: string): void {
         if (text[0] === ACK) {
-            const seq = parseInt(text.slice(1), 36);
-            const entry = this.outbox.get(seq);
-
-            if (!entry) return;
-
-            clearTimeout(entry.timer);
-            this.outbox.delete(seq);
-
+            if (this.outbox.delete(parseInt(text.slice(1), 36)) && !this.outbox.size) waiting.delete(this);
             return;
         };
 
@@ -85,7 +98,7 @@ export class Datagram {
     };
 
     public stop(): void {
-        for (const entry of this.outbox.values()) clearTimeout(entry.timer);
+        waiting.delete(this);
         this.outbox.clear();
     };
 };

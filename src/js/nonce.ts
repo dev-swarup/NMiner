@@ -56,6 +56,32 @@ export function chunkSize(hashrate: number, share: number, deadline: number): nu
     return Math.max(MIN_CHUNK, Math.min(MAX_CHUNK, Math.ceil(rate * window), Math.max(share, MIN_CHUNK)));
 };
 
+export class Ledger {
+    private job_id: string = "";
+    private prior: Grant[] = [];
+    private ranges: Grant[] = [];
+
+    public record(job_id: string, range: Grant): void {
+        if (this.job_id !== job_id) {
+            this.prior = this.ranges;
+            this.ranges = [];
+            this.job_id = job_id;
+        };
+
+        const last = this.ranges[this.ranges.length - 1];
+
+        if (last && last.nonce_limit === range.start_nonce) last.nonce_limit = range.nonce_limit;
+        else this.ranges.push(range);
+    };
+
+    public owns(nonce: number): boolean {
+        for (let i = this.ranges.length - 1; i >= 0; i--) if (nonce >= this.ranges[i].start_nonce && nonce < this.ranges[i].nonce_limit) return true;
+        for (let i = this.prior.length - 1; i >= 0; i--) if (nonce >= this.prior[i].start_nonce && nonce < this.prior[i].nonce_limit) return true;
+
+        return false;
+    };
+};
+
 export function take(space: NonceSpace, count: number): Grant | null {
     while (space.index < space.segments.length) {
         const segment = space.segments[space.index], left = segment.size - space.cursor;

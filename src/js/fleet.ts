@@ -60,12 +60,17 @@ export class FleetChild implements Channel {
         if (!this.alive) return;
 
         this.queue.push(message);
-        if (this.queue.length >= BATCH_LIMIT) return this.flush();
 
-        if (!this.flushing) {
-            this.flushing = true;
-            setImmediate(() => this.flush());
-        };
+        if (this.queue.length >= BATCH_LIMIT) return this.flush();
+        if (this.flushing) return;
+
+        this.flushing = true;
+        setImmediate(this.pump);
+    };
+
+    private pump = (): void => {
+        this.flushing = false;
+        this.flush();
     };
 
     public hand(socket: Socket): boolean {
@@ -78,7 +83,6 @@ export class FleetChild implements Channel {
     };
 
     public flush(): void {
-        this.flushing = false;
         if (this.queue.length === 0) return;
 
         const batch = this.queue;
@@ -90,6 +94,7 @@ export class FleetChild implements Channel {
 
 export class Fleet {
     private pending: Socket[] = [];
+    private roster: FleetChild[] = [];
     private children: Map<number, FleetChild> = new Map();
 
     private backoff: number = RESPAWN_MIN;
@@ -98,16 +103,16 @@ export class Fleet {
 
     private log: Logger;
     private server?: net.Server;
-    private greeting?: () => any;
+    private greetings: Array<() => any> = [];
 
     constructor(private size: number, log: LogLike, private onMessage: (child: FleetChild, raw: any) => void, private onExit: (child: FleetChild) => void) {
         this.log = asLogger(log, "fleet");
         for (let i = 0; i < size; i++) this.spawn();
     };
 
-    public get alive(): number { return [...this.children.values()].filter(child => child.alive).length; };
-    public all(): FleetChild[] { return [...this.children.values()]; };
-    public stats(): Array<{ id: number, load: number, uptime: number }> { return [...this.children.values()].map(child => ({ id: child.id, load: child.load, uptime: Date.now() - child.started })); };
+    public get alive(): number { let live = 0; for (const child of this.roster) if (child.alive) live++; return live; };
+    public all(): FleetChild[] { return this.roster; };
+    public stats(): Array<{ id: number, load: number, uptime: number }> { return this.roster.map(child => ({ id: child.id, load: child.load, uptime: Date.now() - child.started })); };
 
     public listen(port: number): void {
         this.server = net.createServer({ pauseOnConnect: true }, socket => this.dispatch(socket));
@@ -117,15 +122,15 @@ export class Fleet {
     };
 
     public greet(build: () => any): void {
-        this.greeting = build;
+        this.greetings.push(build);
 
         const hello = build();
-        if (hello) for (const child of this.children.values()) child.send(hello);
+        if (hello) for (const child of this.roster) child.send(hello);
     };
 
     public dispatch(socket: Socket): void {
         let pick: FleetChild | null = null;
-        for (const child of this.children.values()) if (child.alive && (!pick || child.load < pick.load)) pick = child;
+        for (const child of this.roster) if (child.alive && (!pick || child.load < pick.load)) pick = child;
 
         if (pick && pick.hand(socket)) return;
         if (this.pending.length >= PENDING_LIMIT) return void socket.destroy();
@@ -139,8 +144,9 @@ export class Fleet {
         this.server?.close();
 
         for (const socket of this.pending.splice(0)) socket.destroy();
-        for (const child of this.children.values()) { if (child.proc.connected) child.proc.disconnect(); child.proc.kill(); };
+        for (const child of this.roster) { if (child.proc.connected) child.proc.disconnect(); child.proc.kill(); };
 
+        this.roster = [];
         this.children.clear();
     };
 
@@ -150,6 +156,8 @@ export class Fleet {
         const child = new FleetChild(id, proc);
 
         this.children.set(id, child);
+        this.roster = [...this.children.values()];
+
         this.log.debug("worker spawned", { worker: id, pid: proc.pid });
 
         proc.on("error", () => { });
@@ -157,6 +165,8 @@ export class Fleet {
 
         proc.on("exit", () => {
             this.children.delete(id);
+            this.roster = [...this.children.values()];
+
             this.onExit(child);
 
             if (this.stopping) return;
@@ -168,9 +178,7 @@ export class Fleet {
             this.backoff = Math.min(RESPAWN_MAX, this.backoff * 2);
         });
 
-        const hello = this.greeting?.();
-        if (hello) child.send(hello);
-
+        for (const build of this.greetings) { const hello = build(); if (hello) child.send(hello); };
         for (const socket of this.pending.splice(0)) child.hand(socket);
     };
 
@@ -205,16 +213,20 @@ export class WorkerLink {
         if (!process.connected) return;
 
         this.queue.push(message);
-        if (this.queue.length >= BATCH_LIMIT) return this.flush();
 
-        if (!this.flushing) {
-            this.flushing = true;
-            setImmediate(() => this.flush());
-        };
+        if (this.queue.length >= BATCH_LIMIT) return this.flush();
+        if (this.flushing) return;
+
+        this.flushing = true;
+        setImmediate(this.pump);
+    };
+
+    private pump = (): void => {
+        this.flushing = false;
+        this.flush();
     };
 
     private flush(): void {
-        this.flushing = false;
         if (this.queue.length === 0) return;
 
         const batch = this.queue;

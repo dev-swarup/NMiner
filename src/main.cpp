@@ -6,7 +6,6 @@
 
 #include "randomx/rx.h"
 #include "randomx/rx_job.h"
-#include "randomx/rx_verify.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -236,7 +235,7 @@ namespace
 
     uint32_t ThreadsForNode(const NodeCache &node)
     {
-        uint32_t limit = node.cores;
+        uint32_t limit = node.pus > 0 ? node.pus : node.cores;
 
         if (node.l3)
             limit = std::min<uint32_t>(limit, static_cast<uint32_t>(node.l3 / RANDOMX_SCRATCHPAD_L3));
@@ -298,7 +297,6 @@ Napi::Object Init(Napi::Env env, Napi::Object exports)
 {
     Rx::Init(env, exports);
     RxJob::Init(env, exports);
-    RxVerify::Init(env, exports);
 
     exports.Set("hugePages", Napi::Function::New(env, HugePages));
     exports.Set("numaNodes", Napi::Function::New(env, GetNumaNodes));

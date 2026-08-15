@@ -63,7 +63,6 @@ endif()
 list(APPEND SOURCES
     ${RANDOMX_INCLUDE}/rx.cpp
     ${RANDOMX_INCLUDE}/rx_job.cpp
-    ${RANDOMX_INCLUDE}/rx_verify.cpp
     ${RANDOMX_INCLUDE}/rx_worker.cpp
     ${RANDOMX_INCLUDE}/aes_hash.cpp
     ${RANDOMX_INCLUDE}/argon2_ref.c

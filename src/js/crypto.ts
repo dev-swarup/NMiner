@@ -1,6 +1,16 @@
 import crypto from "crypto";
 
-const _nonce = Buffer.allocUnsafe(12);
+const _nonce = crypto.randomBytes(12);
+let _low = _nonce.readUInt32BE(8);
+
+function nextNonce(): Buffer {
+    _low = (_low + 1) >>> 0;
+
+    _nonce.writeUInt32BE(_low, 8);
+    if (_low === 0) _nonce.writeUInt32BE((_nonce.readUInt32BE(4) + 1) >>> 0, 4);
+
+    return _nonce;
+};
 
 export function hash(salt: string | Buffer): Buffer {
     return crypto.createHash("sha256").update(salt).update("nminer-salt").digest();
@@ -9,14 +19,14 @@ export function hash(salt: string | Buffer): Buffer {
 export function encrypt(secret: Buffer, data: any): string {
     const text: string = typeof data === "string" ? data : JSON.stringify(data);
 
-    crypto.randomFillSync(_nonce);
-    const cipher = crypto.createCipheriv("chacha20-poly1305", secret, _nonce, { authTagLength: 16 } as any);
+    const nonce = nextNonce();
+    const cipher = crypto.createCipheriv("chacha20-poly1305", secret, nonce, { authTagLength: 16 } as any);
 
     const encrypted = cipher.update(text, "utf8"); cipher.final();
     const tag = cipher.getAuthTag();
 
     const out = Buffer.allocUnsafe(12 + 16 + encrypted.length);
-    _nonce.copy(out, 0); tag.copy(out, 12); encrypted.copy(out, 28);
+    nonce.copy(out, 0); tag.copy(out, 12); encrypted.copy(out, 28);
 
     return out.toString("base64url");
 };

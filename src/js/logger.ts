@@ -4,7 +4,6 @@ const CLEAR = "\x1B[0m";
 export const RED = (s: string) => `${CSI}0;31m${s}${CLEAR}`;
 export const GREEN = (s: string) => `${CSI}0;32m${s}${CLEAR}`;
 export const YELLOW = (s: string) => `${CSI}0;33m${s}${CLEAR}`;
-export const MAGENTA = (s: string) => `${CSI}0;35m${s}${CLEAR}`;
 export const CYAN = (s: string) => `${CSI}0;36m${s}${CLEAR}`;
 export const WHITE = (s: string) => `${CSI}0;37m${s}${CLEAR}`;
 export const GRAY = (s: string) => `${CSI}0;90m${s}${CLEAR}`;
@@ -51,7 +50,7 @@ const Rank: { [key in Level]: number } = { silent: 0, error: 1, warn: 2, info: 3
 const plain = (s: string) => s;
 
 const Badges: { [key: string]: (s: string) => string } = {
-    cpu: CYAN_BG_BOLD, verify: CYAN_BG_BOLD,
+    cpu: CYAN_BG_BOLD,
     net: BLUE_BG_BOLD, pool: BLUE_BG_BOLD, udp: BLUE_BG_BOLD, randomx: BLUE_BG_BOLD,
     miner: MAGENTA_BG_BOLD, share: MAGENTA_BG_BOLD, proxy: MAGENTA_BG_BOLD, fleet: MAGENTA_BG_BOLD, program: MAGENTA_BG_BOLD
 };

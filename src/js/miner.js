@@ -21,10 +21,5 @@ let addon = null; function load() {
     return addon;
 };
 
-for (const key of ["Rx", "RxJob", "RxVerify", "numaNodes", "hugePages", "cacheInfo", "recommendedThreads"])
+for (const key of ["Rx", "RxJob", "numaNodes", "hugePages", "cacheInfo", "recommendedThreads"])
     Object.defineProperty(module.exports, key, { enumerable: true, configurable: true, get: () => load()[key] });
-
-module.exports.VERIFY_MATCHED = 1;
-module.exports.VERIFY_SKIPPED = 8;
-module.exports.VERIFY_POOL_TARGET = 4;
-module.exports.VERIFY_MINER_TARGET = 2;

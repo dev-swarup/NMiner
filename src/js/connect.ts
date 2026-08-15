@@ -18,18 +18,18 @@ export function InvalidateHostname(hostname: string): void {
     _dnsCache.delete(hostname);
 };
 
-function Lookup(hostname: string, family: 4 | 6): Promise<string | null> {
-    if ((process as any).isBun && (dns as any).lookup?.length === 0)
-        return (dns as any).lookup(hostname, { family }).then((res: any) => res?.address ?? null).catch(() => null);
+function Lookup(hostname: string): Promise<string | null> {
+    if (process.isBun && typeof Bun?.dns?.lookup == "function")
+        return Bun.dns.lookup(hostname).then(result => result.length > 0 ? result.at(0)?.address : null).catch(() => null) as any;
 
-    return new Promise((resolve) => dns.lookup(hostname, { family }, (err, address) => resolve(err || !address ? null : address)));
+    return new Promise(resolve => dns.lookup(hostname, (err, address) => resolve(err || !address ? null : address)));
 };
 
 async function ResolveHostname(hostname: string): Promise<string> {
     const cached = _dnsCache.get(hostname);
     if (cached && cached.expires > Date.now()) return cached.address;
 
-    const address = await Lookup(hostname, 4) ?? await Lookup(hostname, 6);
+    const address = await Lookup(hostname);
     if (!address) return hostname;
 
     _dnsCache.set(hostname, { address, expires: Date.now() + DNS_TTL });
@@ -55,16 +55,18 @@ function NormalizeJob(raw: any): StratumJob | null {
     if (!raw || typeof raw.blob !== "string" || typeof raw.job_id !== "string" || typeof raw.target !== "string" || typeof raw.seed_hash !== "string")
         return null;
 
-    return {
+    let job: any = {
         blob: raw.blob,
         job_id: raw.job_id,
         target: raw.target,
-        seed_hash: raw.seed_hash,
-        ...(raw.algo !== undefined ? { algo: raw.algo } : {}),
-        ...(raw.height !== undefined ? { height: raw.height } : {}),
-        ...(raw.start_nonce !== undefined ? { start_nonce: raw.start_nonce } : {}),
-        ...(raw.nonce_limit !== undefined ? { nonce_limit: raw.nonce_limit } : {})
+        seed_hash: raw.seed_hash
     };
+
+    ["algo", "height", "start_nonce", "nonce_limit"].forEach(k => {
+        if (raw[k] !== undefined) job[k] = raw[k];
+    });
+
+    return job;
 };
 
 export class StratumClient extends EventEmitter<{
@@ -123,14 +125,13 @@ export class StratumClient extends EventEmitter<{
                     } catch { };
                 });
         } else {
-            const tcp = socket as net.Socket;
-            tcp
+            const tcp = (socket as net.Socket)
                 .on("end", () => this.handleClose())
                 .on("close", () => this.handleClose())
                 .on("error", () => this.handleClose());
 
-            const chunks: Buffer[] = [];
             let totalLen = 0;
+            const chunks: Buffer[] = [];
 
             tcp.on("data", (raw: Buffer) => {
                 let scanStart = 0;
@@ -147,12 +148,12 @@ export class StratumClient extends EventEmitter<{
                             if (tail.length > 0) {
                                 chunks.push(tail);
                                 totalLen += tail.length;
-                            }
+                            };
                         };
 
                         if (totalLen > MAX_LINE) {
-                            chunks.length = 0;
                             totalLen = 0;
+                            chunks.length = 0;
 
                             this.closeReason = `pool sent more than ${MAX_LINE} bytes without a newline`;
                             tcp.destroy();
@@ -160,8 +161,9 @@ export class StratumClient extends EventEmitter<{
 
                         break;
                     };
-                    const slice = raw.subarray(scanStart, nlPos);
+
                     let line: string;
+                    const slice = raw.subarray(scanStart, nlPos);
 
                     if (chunks.length === 0)
                         line = slice.toString("utf8");
@@ -169,12 +171,12 @@ export class StratumClient extends EventEmitter<{
                         chunks.push(slice);
                         totalLen += slice.length;
                         line = Buffer.concat(chunks, totalLen).toString("utf8");
-                        chunks.length = 0;
+
                         totalLen = 0;
+                        chunks.length = 0;
                     };
 
-                    const trimmed = line.trim();
-                    if (trimmed) {
+                    const trimmed = line.trim(); if (trimmed) {
                         try {
                             const data = JSON.parse(trimmed);
 
@@ -415,7 +417,7 @@ async function Wss(url: string, agent?: string): Promise<{ socket: WebSocket, re
         const ecdh = createExchange();
         const publicSalt = ecdh.generateKeys("hex");
 
-        const socket = new WebSocket(url, { headers: { "x-salt": publicSalt }, lookup: (hostname, options, callback) => callback(null, remoteAddress, 4), ...(typeof agent === "string" ? { agent: new ((await import("proxy-agent")).ProxyAgent)(agent as any) } : {}) });
+        const socket = new WebSocket(url, { headers: { "x-salt": publicSalt }, perMessageDeflate: false, skipUTF8Validation: true, lookup: (_host, _options, callback) => callback(null, remoteAddress, 4), ...(typeof agent === "string" ? { agent: new ((await import("proxy-agent")).ProxyAgent)(agent as any) } : {}) });
 
         const timeout = setTimeout(() => {
             if (resolved) return;

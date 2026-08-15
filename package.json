@@ -16,7 +16,7 @@
     },
     "scripts": {
         "tsc": "tsc",
-        "build": "cmake-js -p${nproc} compile"
+        "build": "cmake-js compile --parallel $(nproc)"
     },
     "dependencies": {
         "ws": "^8.21.0",
@@ -29,6 +29,7 @@
     "devDependencies": {
         "@types/ws": "^8.18.1",
         "typescript": "^7.0.2",
+        "@types/bun": "^1.3.14",
         "@types/node": "^26.1.1"
     },
     "engines": {

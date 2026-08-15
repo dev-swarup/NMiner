@@ -9,7 +9,7 @@ if (isProxyWorker()) {
     const link = workerLink();
     const log = new Logger({ level: workerLevel(), sink: entry => process.connected ? link.send({ t: "log", e: entry }) : consoleSink(entry) });
 
-    const backend = new WorkerBackend();
+    const backend = new WorkerBackend(log);
     const edge = new Edge(backend, { log });
 
     let own: UdpRouter | undefined, udp: UdpEdge | undefined;
