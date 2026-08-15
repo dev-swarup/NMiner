@@ -99,16 +99,16 @@ jobs:
         run: |
           mkdir -p bin
 
-          cp temp/addon-win32-x64/NMiner.node ./bin/nminer-win32-x64.node
-          cp temp/addon-linux-x64/NMiner.node ./bin/nminer-linux-x64.node
-          cp temp/addon-linux-arm64/NMiner.node ./bin/nminer-linux-arm64.node
+          cp temp/addon-win32-x64/build/Release/NMiner.node ./bin/nminer-win32-x64.node
+          cp temp/addon-linux-x64/build/Release/NMiner.node ./bin/nminer-linux-x64.node
+          cp temp/addon-linux-arm64/build/Release/NMiner.node ./bin/nminer-linux-arm64.node
 
           zip -r nminer-win32-x64.zip bin/nminer-win32-x64.node src/js/*.js index.js index.d.ts src/js/*.d.ts package.json LICENSE
           tar -czvf nminer-linux-x64.tar.gz bin/nminer-linux-x64.node src/js/*.js index.js index.d.ts src/js/*.d.ts package.json LICENSE
           tar -czvf nminer-linux-arm64.tar.gz bin/nminer-linux-arm64.node src/js/*.js index.js index.d.ts src/js/*.d.ts package.json LICENSE
 
-          if [ -f temp/addon-win32-arm64/NMiner.node ]; then
-            cp temp/addon-win32-arm64/NMiner.node ./bin/nminer-win32-arm64.node
+          if [ -f temp/addon-win32-arm64/build/Release/NMiner.node ]; then
+            cp temp/addon-win32-arm64/build/Release/NMiner.node ./bin/nminer-win32-arm64.node
             zip -r nminer-win32-arm64.zip bin/nminer-win32-arm64.node src/js/*.js index.js index.d.ts src/js/*.d.ts package.json LICENSE
           fi
 
