@@ -119,6 +119,7 @@ public:
 
     std::mutex lifecycle;
     std::atomic<int> active_vms { 0 };
+    std::atomic<int> pending { 0 };
     std::atomic<bool> updating { false };
     RxMode m_mode { RxMode::Light };
     randomx_cache *cache { nullptr };

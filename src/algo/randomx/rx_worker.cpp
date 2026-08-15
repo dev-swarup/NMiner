@@ -52,7 +52,11 @@ void AllocateWorker::Execute()
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     };
 
-    rx->release();
+    if (rx->cache)
+    {
+        randomx_release_cache(rx->cache);
+        rx->cache = nullptr;
+    };
 
     rx->cache = randomx_alloc_cache(build_cache_flags());
     if (!rx->cache)
@@ -69,15 +73,34 @@ void AllocateWorker::Execute()
         return;
     };
 
-    result = LargePagesSupported() && BuildDataset(static_cast<randomx_flags>(RANDOMX_FLAG_FULL_MEM | RANDOMX_FLAG_LARGE_PAGES));
-    if (!result) result = BuildDataset(RANDOMX_FLAG_FULL_MEM);
-
+    result = BuildDataset();
     if (!result) SetError("randomx_alloc_dataset failed");
 };
 
-bool AllocateWorker::BuildDataset(randomx_flags flags)
+randomx_dataset *AllocateWorker::Reserve(uint32_t numa_id, randomx_flags primary, randomx_flags fallback)
+{
+    const auto it = rx->datasets.find(numa_id);
+    if (it != rx->datasets.end() && it->second) return it->second;
+
+    randomx_dataset *dataset = randomx_alloc_dataset(primary);
+    if (!dataset && primary != fallback) dataset = randomx_alloc_dataset(fallback);
+
+    if (!dataset)
+    {
+        rx->datasets.erase(numa_id);
+        return nullptr;
+    };
+
+    rx->datasets[numa_id] = dataset;
+    return dataset;
+};
+
+bool AllocateWorker::BuildDataset()
 {
     const uint64_t items = randomx_dataset_item_count();
+
+    const randomx_flags fallback = RANDOMX_FLAG_FULL_MEM;
+    const randomx_flags primary = LargePagesSupported() ? static_cast<randomx_flags>(RANDOMX_FLAG_FULL_MEM | RANDOMX_FLAG_LARGE_PAGES) : fallback;
 
 #ifdef HAVE_HWLOC
     hwloc_topology_t topo;
@@ -87,24 +110,15 @@ bool AllocateWorker::BuildDataset(randomx_flags flags)
     int nodes = hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_NUMANODE);
     if (nodes <= 0) nodes = 1;
 
-    bool ok = true;
+    bool ok = false;
 
     for (int n = 0; n < nodes; ++n)
     {
         hwloc_obj_t node = hwloc_get_obj_by_type(topo, HWLOC_OBJ_NUMANODE, n);
         const uint32_t numa_id = node ? node->os_index : 0u;
 
-        if (rx->datasets.count(numa_id))
-            continue;
-
-        randomx_dataset *dataset = randomx_alloc_dataset(flags);
-        if (!dataset)
-        {
-            ok = false;
-            break;
-        };
-
-        rx->datasets[numa_id] = dataset;
+        randomx_dataset *dataset = Reserve(numa_id, primary, fallback);
+        if (!dataset) continue;
 
         int pus = node ? hwloc_get_nbobjs_inside_cpuset_by_type(topo, node->cpuset, HWLOC_OBJ_PU) : hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_PU);
         if (pus <= 0) pus = 1;
@@ -114,16 +128,15 @@ bool AllocateWorker::BuildDataset(randomx_flags flags)
             hwloc_obj_t pu = node ? hwloc_get_obj_inside_cpuset_by_type(topo, node->cpuset, HWLOC_OBJ_PU, i) : hwloc_get_obj_by_type(topo, HWLOC_OBJ_PU, i);
             if (pu) hwloc_set_cpubind(topo, pu->cpuset, HWLOC_CPUBIND_THREAD);
         });
+
+        ok = true;
     };
 
     hwloc_topology_destroy(topo);
     return ok;
 #else
-    randomx_dataset *dataset = randomx_alloc_dataset(flags);
-    if (!dataset)
-        return false;
-
-    rx->datasets[0] = dataset;
+    randomx_dataset *dataset = Reserve(0u, primary, fallback);
+    if (!dataset) return false;
 
     const int cpus = static_cast<int>(std::thread::hardware_concurrency());
     init_parallel(dataset, rx->cache, items, cpus > 0 ? cpus : 1, nullptr);
@@ -134,7 +147,8 @@ bool AllocateWorker::BuildDataset(randomx_flags flags)
 
 void AllocateWorker::Clear()
 {
-    rx->updating.store(false, std::memory_order_release);
+    if (rx->pending.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        rx->updating.store(false, std::memory_order_release);
 };
 
 void AllocateWorker::OnOK()

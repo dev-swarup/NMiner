@@ -16,7 +16,8 @@ public:
 
 private:
     void Clear();
-    bool BuildDataset(randomx_flags flags);
+    bool BuildDataset();
+    randomx_dataset *Reserve(uint32_t numa_id, randomx_flags primary, randomx_flags fallback);
 
     Rx *rx;
     std::vector<uint8_t> seed_hash;

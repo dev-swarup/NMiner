@@ -381,6 +381,8 @@ Napi::Value Rx::queue_allocate(const Napi::CallbackInfo &info, const std::string
     };
 
     auto seed_hash = ToVector(info[0].As<Napi::Buffer<uint8_t>>());
+
+    pending.fetch_add(1, std::memory_order_relaxed);
     updating.store(true, std::memory_order_release);
 
     if (!variant.empty()) apply_variant(variant);
