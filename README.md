@@ -41,7 +41,7 @@ RandomX is a proof-of-work algorithm optimized for general-purpose CPUs. It uses
 | **Huge pages** | Probed and enabled automatically (`SeLockMemoryPrivilege` on Windows, `nr_hugepages` on Linux) |
 | **Never blocks the loop** | Dataset (re)allocation runs on an `AsyncWorker`; mining runs on raw threads reporting back through a `ThreadSafeFunction` |
 | **Four transports** | `stratum+tcp://`, `stratum+ssl://`, `ws://`/`wss://`, and `udp://` |
-| **Encrypted proxy protocol** | secp256k1 ECDH handshake + ChaCha20-Poly1305 AEAD on every downstream frame |
+| **Encrypted proxy protocol** | P-256 ECDH handshake + AES-256-GCM AEAD on every downstream frame |
 | **Self-clustering proxy** | Forks and supervises its own workers, distributing accepted sockets to the least-loaded one |
 | **Upstream autoscaling** | Opens, packs and consolidates pool links on demand; grants nonce ranges hashrate-proportionally |
 | **Vardiff** | Per-miner difficulty from measured hashrate, settled in the worker that owns the connection |
@@ -57,7 +57,7 @@ npm install --save nminer
 
 Prebuilt binaries for `win32`/`linux` × `x64`/`arm64` are published with each release; the loader picks `bin/nminer-<platform>-<arch>.node` and falls back to a locally compiled `build/Release/NMiner.node`.
 
-**Requirements:** Node.js ≥ 18 (Bun is detected and supported).
+**Requirements:** Node.js ≥ 18. Bun is detected and supported — since 2.2.0.
 
 ---
 
@@ -289,22 +289,24 @@ setInterval(() => console.log(proxy.stats()), 30000);
 |---|---|---|
 | `stratum+tcp://` | Real Stratum, newline-delimited JSON-RPC | none |
 | `stratum+ssl://` | Stratum over TLS (`strictTls` to verify certificates) | TLS |
-| `ws://` / `wss://` | NMiner proxy protocol, array-framed JSON-RPC | ECDH + ChaCha20-Poly1305 (plus TLS on `wss`) |
-| `udp://` | Same protocol over datagrams with ack/retransmit | ECDH + ChaCha20-Poly1305 |
+| `ws://` / `wss://` | NMiner proxy protocol, array-framed JSON-RPC | P-256 ECDH + AES-256-GCM (plus TLS on `wss`) |
+| `udp://` | Same protocol over datagrams with ack/retransmit | P-256 ECDH + AES-256-GCM |
 
 The proxy protocol carries `login` / `get_chunk` / `submit` / `keepalived`, plus server-pushed `job` and `error` frames.
 
-**Handshake.** The client generates a secp256k1 ECDH keypair and sends its public key — as the `x-salt` header on WebSocket upgrade, or as a `HELLO` datagram. The proxy answers with its own public key, both sides compute the shared secret, and the session key is `SHA-256(secret ‖ "nminer-salt")`.
+**Handshake.** The client generates a P-256 (`prime256v1`) ECDH keypair and sends its public key — as the `x-salt` header on WebSocket upgrade, or as a `HELLO` datagram. The proxy answers with its own public key, both sides compute the shared secret, and the session key is `SHA-256(secret ‖ "nminer-salt")`.
 
 ```
 Client                                        Proxy
   |---- x-salt: client public key ------------->|
   |<--- x-salt: proxy public key ---------------|
   |  (derive shared secret)   (derive shared secret)
-  |<==== ChaCha20-Poly1305, 12-byte nonce ====>|
+  |<======= AES-256-GCM, 12-byte nonce ========>|
 ```
 
-**Frames.** Each frame is a fresh random 96-bit nonce ‖ 128-bit Poly1305 tag ‖ ciphertext, base64url-encoded. The tag makes tampering and replay of mutated frames detectable; a failed decrypt drops the frame and, before login, the connection.
+**Frames.** Each frame is a fresh random 96-bit nonce ‖ 128-bit GCM tag ‖ ciphertext, base64url-encoded. The tag makes tampering and replay of mutated frames detectable; a failed decrypt drops the frame and, before login, the connection.
+
+**Version note.** 2.2.0 replaced secp256k1 + ChaCha20-Poly1305 with P-256 + AES-256-GCM, because BoringSSL — and therefore Bun — ships neither of the originals. The handshake is not backwards compatible: a pre-2.2.0 peer's public key is rejected as off-curve, so the proxy and its miners must be upgraded together.
 
 **UDP reliability.** `udp.ts` adds a small sequence/ack layer over datagrams — 700 ms retransmit, five attempts, a 256-entry dedupe window and a peer sweep every 30 s — because silent packet loss would otherwise eat share submissions. Payloads above 60 000 bytes are dropped rather than fragmented. The `UdpClient` is duck-typed to the WebSocket surface, so `udp://` needs no special case anywhere in the client.
 

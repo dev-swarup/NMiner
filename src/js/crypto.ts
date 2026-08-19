@@ -20,7 +20,7 @@ export function encrypt(secret: Buffer, data: any): string {
     const text: string = typeof data === "string" ? data : JSON.stringify(data);
 
     const nonce = nextNonce();
-    const cipher = crypto.createCipheriv("chacha20-poly1305", secret, nonce, { authTagLength: 16 } as any);
+    const cipher = crypto.createCipheriv("aes-256-gcm", secret, nonce, { authTagLength: 16 } as any);
 
     const encrypted = cipher.update(text, "utf8"); cipher.final();
     const tag = cipher.getAuthTag();
@@ -34,7 +34,7 @@ export function encrypt(secret: Buffer, data: any): string {
 export function decrypt(secret: Buffer, data: string): any {
     const buf = Buffer.from(data, "base64url");
 
-    const decipher = crypto.createDecipheriv("chacha20-poly1305", secret, buf.subarray(0, 12), { authTagLength: 16 } as any);
+    const decipher = crypto.createDecipheriv("aes-256-gcm", secret, buf.subarray(0, 12), { authTagLength: 16 } as any);
     decipher.setAuthTag(buf.subarray(12, 28));
 
     const text = decipher.update(buf.subarray(28) as any, "binary", "utf8") + decipher.final("utf8");
@@ -42,7 +42,7 @@ export function decrypt(secret: Buffer, data: string): any {
 };
 
 export function createExchange(): crypto.ECDH {
-    return crypto.createECDH("secp256k1");
+    return crypto.createECDH("prime256v1");
 };
 
 export function generateHandshake(j: NodeJS.ArrayBufferView<ArrayBufferLike>): { salt: string, session: Buffer } {
