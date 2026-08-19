@@ -84,7 +84,7 @@ const proxy = new NMinerProxy("stratum+tcp://pool.supportxmr.com:3333", "YOUR_WA
     logging: "info"
 });
 
-proxy.on("share", (address, target, height) => console.log("accepted", address, height));
+proxy.on("share", (address, difficulty, height) => console.log("accepted", address, difficulty, height));
 ```
 
 Point miners at it with `ws://proxy-host:8080` or `udp://proxy-host:8080`.
@@ -253,7 +253,7 @@ The proxy holds no RandomX dataset of its own. Shares are accepted on arithmetic
 ### Events & API
 
 ```javascript
-proxy.on("share", (address, target, height) => { /* accepted by the pool */ });
+proxy.on("share", (address, difficulty, height) => { /* accepted by the pool, difficulty is the pool share difficulty */ });
 proxy.on("work",  (address, difficulty, forwarded, solved) => { /* every valid share */ });
 ```
 

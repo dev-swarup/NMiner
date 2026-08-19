@@ -401,7 +401,7 @@ export interface ProxyOptions extends MinerOptions {
 };
 
 export class NMinerProxy extends EventEmitter<{
-    share: [address: string, target: string, height?: number];
+    share: [address: string, difficulty: number, height?: number];
     work: [address: string, difficulty: number, forwarded: boolean, solved: number];
 }> {
     private pool: string;
@@ -662,7 +662,7 @@ export class NMinerProxy extends EventEmitter<{
                 this.accepted++;
                 this.solved += share.solved;
 
-                this.emit("share", share.address, share.target, share.height);
+                this.emit("share", share.address, share.solved, share.height);
                 this.share.success("accepted", { accepted: this.accepted, rejected: this.rejected, diff: share.difficulty, solved: PrintDiff(share.solved), total: PrintDiff(this.solved), took: ms(share.elapsed) });
             } else {
                 this.rejected++;
