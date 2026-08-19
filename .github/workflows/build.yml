@@ -50,6 +50,16 @@ jobs:
           strip --strip-all build/Release/NMiner.node
         shell: bash
 
+      - if: matrix.config.name == 'linux'
+        name: Verify non-executable stack
+        run: |
+          readelf -lW build/Release/NMiner.node | grep GNU_STACK
+          if readelf -lW build/Release/NMiner.node | grep -q 'GNU_STACK.*RWE'; then
+            echo "::error::NMiner.node requires an executable stack; glibc 2.41+ will refuse to dlopen it."
+            exit 1
+          fi
+        shell: bash
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:

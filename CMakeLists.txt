@@ -133,4 +133,14 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NAPI_VERSION=8 NAPI_DIS
 
 if(NOT MSVC)
     target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+
+    check_c_compiler_flag("-Wa,--noexecstack" HAVE_ASM_NOEXECSTACK)
+
+    if(HAVE_ASM_NOEXECSTACK)
+        target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Wa,--noexecstack>)
+    endif()
+
+    if(NOT APPLE)
+        target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "LINKER:-z,noexecstack")
+    endif()
 endif()
