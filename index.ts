@@ -257,7 +257,7 @@ export class NMiner {
             const stratum = this.stratum = await connect(this.pool, this.options?.proxy, this.options?.keepalive, this.options?.strictTls);
 
             if (this.closed) return stratum.close();
-            this.net.info("use pool", { "": stratum.host, ip: stratum.remoteAddress, proxy: this.options.proxy });
+            this.net.info("use pool", { "": stratum.host, ip: stratum.remoteAddress, ...(this.options.proxy ? { proxy: (new URL(this.options.proxy)).host } : {}) });
 
             const used_threads = this.options.threads || await MaxThreads();
 

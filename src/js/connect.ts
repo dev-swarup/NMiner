@@ -417,7 +417,24 @@ async function Wss(url: string, agent?: string): Promise<{ socket: WebSocket, re
         const ecdh = createExchange();
         const publicSalt = ecdh.generateKeys("hex");
 
-        const socket = new WebSocket(url, { headers: { "x-salt": publicSalt }, perMessageDeflate: false, skipUTF8Validation: true, lookup: (_host, _options, callback) => callback(null, remoteAddress, 4), ...(typeof agent === "string" ? { agent: new ((await import("proxy-agent")).ProxyAgent)(agent as any) } : {}) });
+        const isIp = net.isIP(remoteAddress) !== 0;
+        const family = net.isIPv6(remoteAddress) ? 6 : 4;
+
+        const socket = new WebSocket(url, {
+            headers: { "x-salt": publicSalt }, perMessageDeflate: false, skipUTF8Validation: true, ...(typeof agent === "string" ? { agent: new ((await import("proxy-agent")).ProxyAgent)(agent as any) } : (isIp ? {
+                lookup: (_host: string, options: any, callback: any) => {
+                    if (typeof options === "function") {
+                        callback = options;
+                        options = {};
+                    };
+
+                    if (options?.all)
+                        callback(null, [{ address: remoteAddress, family }]);
+                    else
+                        callback(null, remoteAddress, family);
+                }
+            } : {}))
+        });
 
         const timeout = setTimeout(() => {
             if (resolved) return;
