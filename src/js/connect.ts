@@ -1,8 +1,11 @@
 import dns from "dns";
 import net from "net";
 import tls from "tls";
+import crypto from "crypto";
 import { WebSocket } from "ws";
 import { SocksClient } from "socks";
+
+const WsClient: typeof WebSocket = (WebSocket as any).prototype?.setSocket ? WebSocket : require(require.resolve("ws/package.json").replace("package.json", "index.js")).WebSocket;
 
 import { version } from "../../package.json";
 
@@ -409,65 +412,113 @@ async function Tcp(protocol: string, host: string, port: number, agent?: string,
 
 async function Wss(url: string, agent?: string): Promise<{ socket: WebSocket, remoteAddress: string }> {
     const u = new URL(url);
-    const remoteAddress = await ResolveHostname(u.hostname);
+    const isSecure = u.protocol === "wss:";
+    const { socket: rawSocket, remoteAddress } = await Tcp(isSecure ? "stratum+ssl:" : "stratum+tcp:", u.hostname, parseInt(u.port) || (isSecure ? 443 : 80), agent, true);
 
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
         let resolved = false;
-
         const ecdh = createExchange();
         const publicSalt = ecdh.generateKeys("hex");
 
-        const isIp = net.isIP(remoteAddress) !== 0;
-        const family = net.isIPv6(remoteAddress) ? 6 : 4;
-
-        const socket = new WebSocket(url, {
-            headers: { "x-salt": publicSalt }, perMessageDeflate: false, skipUTF8Validation: true, ...(typeof agent === "string" ? { agent: new ((await import("proxy-agent")).ProxyAgent)(agent as any) } : (isIp ? {
-                lookup: (_host: string, options: any, callback: any) => {
-                    if (typeof options === "function") {
-                        callback = options;
-                        options = {};
-                    };
-
-                    if (options?.all)
-                        callback(null, [{ address: remoteAddress, family }]);
-                    else
-                        callback(null, remoteAddress, family);
-                }
-            } : {}))
-        });
-
         const timeout = setTimeout(() => {
             if (resolved) return;
-
             resolved = true;
-            socket.terminate();
-
+            rawSocket.destroy();
             InvalidateHostname(u.hostname);
             reject(new Error(`WebSocket connection timeout: failed to connect to ${u.host} within 15000ms.`));
         }, 15000);
 
-        socket.on("open", () => {
-            resolved = true;
-            clearTimeout(timeout);
-            resolve({ socket, remoteAddress });
-        });
+        let buffer = Buffer.alloc(0);
+        const onData = (chunk: Buffer) => {
+            buffer = Buffer.concat([buffer, chunk]);
+            const headerEnd = buffer.indexOf("\r\n\r\n");
 
-        socket.on("error", (err) => {
+            if (headerEnd !== -1) {
+                rawSocket.removeListener("data", onData);
+                rawSocket.removeListener("error", onError);
+                rawSocket.removeListener("close", onClose);
+
+                const headerStr = buffer.subarray(0, headerEnd).toString("utf8");
+                const head = buffer.subarray(headerEnd + 4);
+
+                const statusMatch = headerStr.match(/^HTTP\/[0-9.]+\s+(\d+)/i);
+                const statusCode = statusMatch ? parseInt(statusMatch[1]) : 0;
+                if (statusCode !== 101) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    rawSocket.destroy();
+                    InvalidateHostname(u.hostname);
+                    return reject(new Error(`WebSocket connection failed: unexpected server response (${statusCode || headerStr.split("\r\n")[0]}).`));
+                };
+
+                const saltMatch = headerStr.match(/x-salt:\s*([a-f0-9]+)/i);
+                if (!saltMatch) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    rawSocket.destroy();
+                    InvalidateHostname(u.hostname);
+                    return reject(new Error(`WebSocket connection failed: server did not provide handshake header.`));
+                };
+
+                try {
+                    const secret = hash(ecdh.computeSecret(saltMatch[1], "hex"));
+                    const ws: WebSocket = new (WsClient as any)(null, undefined, { generateMask: (m: Buffer) => crypto.randomFillSync(m) });
+                    (ws as any)._isServer = false;
+                    (ws as any).setSocket(rawSocket, head, {
+                        maxPayload: 64 * 1024,
+                        skipUTF8Validation: true,
+                        generateMask: (m: Buffer) => crypto.randomFillSync(m),
+                    });
+                    (ws as any).session = secret;
+
+                    resolved = true;
+                    clearTimeout(timeout);
+                    resolve({ socket: ws, remoteAddress });
+                } catch (err: any) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    rawSocket.destroy();
+                    InvalidateHostname(u.hostname);
+                    reject(new Error(`WebSocket handshake failed: ${err.message}`));
+                };
+            };
+        };
+
+        const onError = (err: Error) => {
             if (!resolved) {
                 resolved = true;
                 clearTimeout(timeout);
-
                 InvalidateHostname(u.hostname);
                 reject(new Error(`WebSocket connection failed: unable to connect to ${u.host} (${err.message}).`));
             };
-        });
+        };
 
-        socket.on("upgrade", (res) => {
-            const privateHash = res.headers["x-salt"];
-            if (!privateHash) return socket.terminate();
+        const onClose = () => {
+            if (!resolved) {
+                resolved = true;
+                clearTimeout(timeout);
+                InvalidateHostname(u.hostname);
+                reject(new Error(`WebSocket connection closed before handshake completed.`));
+            };
+        };
 
-            (socket as any).session = hash(ecdh.computeSecret(privateHash as string, "hex"));
-        });
+        rawSocket.on("data", onData);
+        rawSocket.once("error", onError);
+        rawSocket.once("close", onClose);
+
+        const path = (u.pathname || "/") + (u.search || ""), req = [
+            `GET ${path} HTTP/1.1`,
+            `Host: ${u.host}`,
+            `Upgrade: websocket`,
+            `Connection: Upgrade`,
+            `Sec-WebSocket-Key: ${crypto.randomBytes(16).toString("base64")}`,
+            `Sec-WebSocket-Version: 13`,
+            `x-salt: ${publicSalt}`,
+            ``,
+            ``
+        ].join("\r\n");
+
+        rawSocket.write(req);
     });
 };
 
